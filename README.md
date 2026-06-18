@@ -250,18 +250,35 @@ services:
       - PORT=3000
 ```
 
-## Docker Services (Future)
+## Docker Services
 
-When ready to add databases, AI, and monitoring, deploy this on the Proxmox host or a dedicated LXC:
+Deploy databases, AI, and monitoring on the Proxmox host or a dedicated VM:
+
+### Quick install (interactive)
 
 ```bash
+git clone https://github.com/kjonh2/homelab.git /opt/homelab
 cd /opt/homelab
-cp .env.example .env
-# Edit .env with your values
-docker compose -f docker-compose.homelab.yml up -d
+bash setup.sh
 ```
 
-See `docker-compose.homelab.yml` for the full service definitions.
+The wizard will ask you for domain, passwords, API keys, and which services to deploy.
+
+### Automated (one command)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kjonh2/homelab/main/install.sh | bash
+```
+
+### Manual
+
+```bash
+git clone https://github.com/kjonh2/homelab.git /opt/homelab
+cd /opt/homelab
+cp .env.example .env
+nano .env
+docker compose -f docker-compose.homelab.yml up -d
+```
 
 ## DNS Configuration
 
