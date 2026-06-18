@@ -1,7 +1,7 @@
 # Traefik Dynamic Configuration
 # https://doc.traefik.io/traefik/reference/dynamic-configuration/file/
 #
-# Routes, middlewares, and services for iknowu.org
+# Routes, middlewares, and services for example.com
 
 http:
   # ===================================================================

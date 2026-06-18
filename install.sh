@@ -26,7 +26,7 @@ info() { echo -e "${CYAN}[i]${NC} $1"; }
 
 echo ""
 echo -e "${CYAN}╔══════════════════════════════════════════════════╗${NC}"
-echo -e "${CYAN}║         HOMELAB — iknowu.org Installer          ║${NC}"
+echo -e "${CYAN}║         HOMELAB — One-command Installer          ║${NC}"
 echo -e "${CYAN}╚══════════════════════════════════════════════════╝${NC}"
 echo ""
 
@@ -86,7 +86,7 @@ if [[ ! -f .env ]]; then
 
     # Detect primary IP
     DEFAULT_IP=$(ip route get 1 | awk '{print $7; exit}')
-    DOMAIN="iknowu.org"
+    DOMAIN="example.com"
 
     sed -i "s|DOMAIN=.*|DOMAIN=${DOMAIN}|" .env
     sed -i "s|POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${POSTGRES_PASS}|" .env

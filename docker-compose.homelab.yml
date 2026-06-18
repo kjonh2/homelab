@@ -1,7 +1,7 @@
 version: "3.9"
 
 # ============================================================================
-# HOMELAB — Docker Services for iknowu.org
+# HOMELAB — Docker Services for example.com
 #
 # These services run on the Proxmox host (or a dedicated LXC) alongside
 # the LXC containers (100: NPM, 101: Traefik, 102: Node.js app).

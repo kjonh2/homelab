@@ -105,7 +105,7 @@ echo ""
 echo -e "${CYAN}╔══════════════════════════════════════════════════════╗${NC}"
 echo -e "${CYAN}║                                                      ║${NC}"
 echo -e "${CYAN}║   🏠  HOMELAB — Interactive Setup Wizard            ║${NC}"
-echo -e "${CYAN}║       iknowu.org infrastructure                      ║${NC}"
+echo -e "${CYAN}║       Self-hosted infrastructure                     ║${NC}"
 echo -e "${CYAN}║                                                      ║${NC}"
 echo -e "${CYAN}╚══════════════════════════════════════════════════════╝${NC}"
 echo ""
@@ -122,8 +122,8 @@ echo ""
 echo -e "${BOLD}━━━ Step 1: Domain Configuration ━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 
-DOMAIN=$(ask "Domain name" "iknowu.org")
-TRAEFIK_DOMAIN=$(ask "Traefik dashboard subdomain" "traefik.${DOMAIN}")
+DOMAIN=$(ask "Domain name" "example.com")
+TRAEFIK_DOMAIN=$(ask "Traefik dashboard subdomain" "traefik.example.com")
 
 # ── Step 2: Database Passwords ──────────────────────────────────────────────
 

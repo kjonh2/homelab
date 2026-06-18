@@ -2,7 +2,7 @@
 
 ## What This Project Is
 
-This is the infrastructure-as-code repository for **iknowu.org**, a self-hosted homelab running on **Proxmox** with LXC containers and Docker services.
+This is the infrastructure-as-code repository for **example.com**, a self-hosted homelab running on **Proxmox** with LXC containers and Docker services.
 
 ## Architecture Overview
 
@@ -16,7 +16,7 @@ Internet → Traefik (LXC 101, SSL) → Nginx Proxy Manager (LXC 100, GUI routin
 |-----|------|---------|
 | 100 | nginx-proxy-manager | Internal reverse proxy with web GUI (NPM) |
 | 101 | traefik | Entry point, SSL termination (Let's Encrypt) |
-| 102 | nodejs-app | Main website (Node.js) serving iknowu.org |
+| 102 | nodejs-app | Main website (Node.js) serving example.com |
 
 ### Docker Services (this repo)
 

@@ -1,4 +1,4 @@
-# 🏠 Homelab — iknowu.org
+# 🏠 Homelab — Self-Hosted Infrastructure
 
 Self-hosted infrastructure on Proxmox with LXC containers, Traefik SSL termination, Nginx Proxy Manager for routing, and Docker services for databases, AI, and monitoring.
 
@@ -9,8 +9,8 @@ Self-hosted infrastructure on Proxmox with LXC containers, Traefik SSL terminati
                             │
                             ▼
               ┌─────────────────────────┐
-              │   Cloudflare DNS        │
-              │   (iknowu.org)          │
+              │   DNS (your provider)   │
+              │   (example.com)         │
               └────────────┬────────────┘
                            │
                            ▼
@@ -34,10 +34,10 @@ Self-hosted infrastructure on Proxmox with LXC containers, Traefik SSL terminati
           │                │                │
           ▼                ▼                ▼
    ┌────────────┐  ┌────────────┐  ┌────────────┐
-   │ LXC 102    │  │ Future     │  │ Future     │
-   │ Node.js    │  │ services   │  │ services   │
-   │ App        │  │ (Docker)   │  │ (Docker)   │
-   │ iknowu.org │  │            │  │            │
+   │ LXC 102    │  │ Docker     │  │ Future     │
+   │ Node.js    │  │ Services   │  │ services   │
+   │ App        │  │ (this repo)│  │            │
+   │ example.com│  │            │  │            │
    └────────────┘  └────────────┘  └────────────┘
 ```
 
@@ -140,7 +140,7 @@ providers:
 certificatesResolvers:
   letsencrypt:
     acme:
-      email: admin@iknowu.org
+      email: admin@example.com
       storage: /letsencrypt/acme.json
       httpChallenge:
         entryPoint: web
@@ -215,15 +215,15 @@ Configure these in the NPM GUI (`http://192.168.1.100:81`):
 
 | Domain | Forward To | Port | Scheme |
 |--------|-----------|------|--------|
-| `iknowu.org` | 192.168.1.102 | 3000 | http |
-| `www.iknowu.org` | 192.168.1.102 | 3000 | http |
-| `traefik.iknowu.org` | 192.168.1.101 | 8080 | http |
+| `example.com` | 192.168.1.102 | 3000 | http |
+| `www.example.com` | 192.168.1.102 | 3000 | http |
+| `traefik.example.com` | 192.168.1.101 | 8080 | http |
 
 Default login: `admin@example.com` / `changeme`
 
 ## Node.js App (LXC 102) — Main Website
 
-Your Node.js application serving `iknowu.org`.
+Your Node.js application serving `example.com`.
 
 ### Setup
 
@@ -286,7 +286,7 @@ Point your domain to the server:
 
 | Type | Name | Value |
 |------|------|-------|
-| A | `iknowu.org` | `<your-server-ip>` |
+| A | `example.com` | `<your-server-ip>` |
 | A | `www` | `<your-server-ip>` |
 | A | `traefik` | `<your-server-ip>` |
 
@@ -309,7 +309,7 @@ docker logs -f npm
 docker logs -f nodejs-app
 
 # Test routing
-curl -H "Host: iknowu.org" http://192.168.1.101
+curl -H "Host: example.com" http://192.168.1.101
 ```
 
 ## License
