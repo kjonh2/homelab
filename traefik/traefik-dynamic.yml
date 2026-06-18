@@ -1,0 +1,138 @@
+# Traefik Dynamic Configuration
+# https://doc.traefik.io/traefik/reference/dynamic-configuration/file/
+#
+# Routes, middlewares, and services for iknowu.org
+
+http:
+  # ===================================================================
+  # ROUTERS
+  # ===================================================================
+  routers:
+    # Hermes WebUI — /hermes
+    hermes:
+      rule: "Host(`${DOMAIN}`) && (PathPrefix(`/hermes`) || PathPrefix(`/hermes/`))"
+      service: hermes
+      entryPoints: [web, websecure]
+      middlewares: [hermes-strip, compress]
+      tls:
+        certResolver: letsencrypt
+      priority: 10
+
+    # Grafana — /grafana
+    grafana:
+      rule: "Host(`${DOMAIN}`) && (PathPrefix(`/grafana`) || PathPrefix(`/grafana/`))"
+      service: grafana
+      entryPoints: [web, websecure]
+      middlewares: [grafana-strip, compress]
+      tls:
+        certResolver: letsencrypt
+      priority: 10
+
+    # Prometheus — /prometheus
+    prometheus:
+      rule: "Host(`${DOMAIN}`) && (PathPrefix(`/prometheus`) || PathPrefix(`/prometheus/`))"
+      service: prometheus
+      entryPoints: [web, websecure]
+      middlewares: [prometheus-strip, compress]
+      tls:
+        certResolver: letsencrypt
+      priority: 10
+
+    # N8N — /n8n
+    n8n:
+      rule: "Host(`${DOMAIN}`) && (PathPrefix(`/n8n`) || PathPrefix(`/n8n/`))"
+      service: n8n
+      entryPoints: [web, websecure]
+      middlewares: [n8n-strip, compress]
+      tls:
+        certResolver: letsencrypt
+      priority: 10
+
+  # ===================================================================
+  # SERVICES
+  # ===================================================================
+  services:
+    hermes:
+      loadBalancer:
+        servers:
+          - url: "http://hermes-agent:8787"
+        healthCheck:
+          path: /
+          interval: 30s
+          timeout: 5s
+
+    grafana:
+      loadBalancer:
+        servers:
+          - url: "http://grafana:3000"
+        healthCheck:
+          path: /api/health
+          interval: 30s
+          timeout: 5s
+
+    prometheus:
+      loadBalancer:
+        servers:
+          - url: "http://prometheus:9090"
+        healthCheck:
+          path: /-/healthy
+          interval: 30s
+          timeout: 5s
+
+    n8n:
+      loadBalancer:
+        servers:
+          - url: "http://n8n:5678"
+        healthCheck:
+          path: /healthz
+          interval: 30s
+          timeout: 5s
+
+  # ===================================================================
+  # MIDDLEWARES
+  # ===================================================================
+  middlewares:
+    # Path prefix stripping
+    hermes-strip:
+      stripPrefix:
+        prefixes: [/hermes]
+        forceSlash: true
+
+    grafana-strip:
+      stripPrefix:
+        prefixes: [/grafana]
+        forceSlash: true
+
+    prometheus-strip:
+      stripPrefix:
+        prefixes: [/prometheus]
+        forceSlash: true
+
+    n8n-strip:
+      stripPrefix:
+        prefixes: [/n8n]
+        forceSlash: true
+
+    # Compression
+    compress:
+      compress:
+        minLength: 1000
+
+    # Security headers
+    security-headers:
+      headers:
+        sslRedirect: true
+        forceSTSHeader: true
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+        referrerPolicy: strict-origin-when-cross-origin
+        contentTypeNosniff: true
+        browserXssFilter: true
+
+    # Rate limiting
+    rate-limit:
+      rateLimit:
+        average: 100
+        burst: 50
+        period: 1m

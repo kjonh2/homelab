@@ -1,0 +1,300 @@
+# 🏠 Homelab — iknowu.org
+
+Self-hosted infrastructure on Proxmox with LXC containers, Traefik SSL termination, Nginx Proxy Manager for routing, and Docker services for databases, AI, and monitoring.
+
+## Architecture
+
+```
+                         Internet
+                            │
+                            ▼
+              ┌─────────────────────────┐
+              │   Cloudflare DNS        │
+              │   (iknowu.org)          │
+              └────────────┬────────────┘
+                           │
+                           ▼
+              ┌─────────────────────────┐
+              │   LXC 101 — Traefik     │
+              │   Ports: 80, 443        │
+              │   SSL termination       │
+              │   Auto-renew (Let's     │
+              │   Encrypt)              │
+              └────────────┬────────────┘
+                           │
+                           ▼
+              ┌─────────────────────────┐
+              │   LXC 100 — Nginx       │
+              │   Proxy Manager         │
+              │   Port: 81 (admin)      │
+              │   GUI-based routing     │
+              └────────────┬────────────┘
+                           │
+          ┌────────────────┼────────────────┐
+          │                │                │
+          ▼                ▼                ▼
+   ┌────────────┐  ┌────────────┐  ┌────────────┐
+   │ LXC 102    │  │ Future     │  │ Future     │
+   │ Node.js    │  │ services   │  │ services   │
+   │ App        │  │ (Docker)   │  │ (Docker)   │
+   │ iknowu.org │  │            │  │            │
+   └────────────┘  └────────────┘  └────────────┘
+```
+
+## Infrastructure
+
+### Proxmox Host
+
+| LXC | Name | IP | Purpose |
+|-----|------|----|---------|
+| 100 | nginx-proxy-manager | 192.168.1.100 | Reverse proxy with GUI |
+| 101 | traefik | 192.168.1.101 | SSL termination & entry point |
+| 102 | nodejs-app | 192.168.1.102 | Main website (Node.js) |
+
+### Planned Docker Services
+
+These will be added to the Proxmox host (or a dedicated LXC) as Docker containers:
+
+| Service | Purpose | Image |
+|---------|---------|-------|
+| PostgreSQL | Relational database | `postgres:16-alpine` |
+| MongoDB | Document database | `mongo:7` |
+| Redis | Cache & sessions | `redis:7-alpine` |
+| Hermes Agent | AI agent gateway | `nousresearch/hermes-agent` |
+| Grafana | Monitoring dashboards | `grafana/grafana-oss` |
+| Prometheus | Metrics collection | `prom/prometheus` |
+| N8N | Workflow automation | `n8nio/n8n` |
+
+## Traefik (LXC 101) — Entry Point
+
+Traefik receives all traffic on ports 80/443, handles SSL, and forwards to Nginx Proxy Manager.
+
+### Setup
+
+```bash
+# On LXC 101
+apt update && apt install docker.io docker-compose -y
+
+# Create directories
+mkdir -p /opt/traefik
+
+# Start
+docker compose -f /opt/traefik/docker-compose.yml up -d
+```
+
+### Configuration
+
+**`/opt/traefik/docker-compose.yml`:**
+
+```yaml
+version: "3.9"
+
+services:
+  traefik:
+    image: traefik:v3.7
+    container_name: traefik
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./letsencrypt:/letsencrypt
+      - ./traefik.yml:/traefik.yml:ro
+      - ./dynamic.yml:/dynamic.yml:ro
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    external: true
+```
+
+**`/opt/traefik/traefik.yml`:**
+
+```yaml
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+api:
+  insecure: true
+  dashboard: true
+
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+  websecure:
+    address: ":443"
+
+providers:
+  file:
+    filename: /dynamic.yml
+    watch: true
+
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      email: admin@iknowu.org
+      storage: /letsencrypt/acme.json
+      httpChallenge:
+        entryPoint: web
+
+log:
+  level: INFO
+```
+
+**`/opt/traefik/dynamic.yml`:**
+
+```yaml
+http:
+  routers:
+    # Forward everything to Nginx Proxy Manager
+    to-npm:
+      rule: "HostRegexp(`{host:.+}`)"
+      service: npm
+      entryPoints: [web, websecure]
+      tls:
+        certResolver: letsencrypt
+      priority: 1
+
+  services:
+    npm:
+      loadBalancer:
+        servers:
+          - url: "http://192.168.1.100:80"
+```
+
+### Create Docker Network
+
+```bash
+docker network create proxy
+```
+
+## Nginx Proxy Manager (LXC 100) — Internal Routing
+
+NPM handles all internal routing via its web GUI. Access at `http://192.168.1.100:81`.
+
+### Setup
+
+```bash
+# On LXC 100
+apt update && apt install docker.io docker-compose -y
+mkdir -p /opt/npm
+```
+
+**`/opt/npm/docker-compose.yml`:**
+
+```yaml
+version: "3.9"
+
+services:
+  npm:
+    image: jc21/nginx-proxy-manager:latest
+    container_name: npm
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "81:81"     # Admin GUI
+      - "443:443"
+    volumes:
+      - ./data:/data
+      - ./letsencrypt:/etc/letsencrypt
+    environment:
+      - DB_SQLITE_FILE=/data/database.sqlite
+```
+
+### NPM Proxy Hosts
+
+Configure these in the NPM GUI (`http://192.168.1.100:81`):
+
+| Domain | Forward To | Port | Scheme |
+|--------|-----------|------|--------|
+| `iknowu.org` | 192.168.1.102 | 3000 | http |
+| `www.iknowu.org` | 192.168.1.102 | 3000 | http |
+| `traefik.iknowu.org` | 192.168.1.101 | 8080 | http |
+
+Default login: `admin@example.com` / `changeme`
+
+## Node.js App (LXC 102) — Main Website
+
+Your Node.js application serving `iknowu.org`.
+
+### Setup
+
+```bash
+# On LXC 102
+apt update && apt install nodejs npm -y
+mkdir -p /opt/app
+```
+
+**`/opt/app/docker-compose.yml`:**
+
+```yaml
+version: "3.9"
+
+services:
+  app:
+    build: .
+    container_name: nodejs-app
+    restart: unless-stopped
+    expose:
+      - "3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+```
+
+## Docker Services (Future)
+
+When ready to add databases, AI, and monitoring, deploy this on the Proxmox host or a dedicated LXC:
+
+```bash
+cd /opt/homelab
+cp .env.example .env
+# Edit .env with your values
+docker compose -f docker-compose.homelab.yml up -d
+```
+
+See `docker-compose.homelab.yml` for the full service definitions.
+
+## DNS Configuration
+
+Point your domain to the server:
+
+| Type | Name | Value |
+|------|------|-------|
+| A | `iknowu.org` | `<your-server-ip>` |
+| A | `www` | `<your-server-ip>` |
+| A | `traefik` | `<your-server-ip>` |
+
+## Adding New Services
+
+1. Deploy the service (Docker container on Proxmox or new LXC)
+2. Add a Proxy Host in NPM GUI pointing to the service IP:port
+3. SSL is handled automatically by Traefik → NPM
+
+## Troubleshooting
+
+```bash
+# Check Traefik
+docker logs -f traefik
+
+# Check NPM
+docker logs -f npm
+
+# Check Node.js app
+docker logs -f nodejs-app
+
+# Test routing
+curl -H "Host: iknowu.org" http://192.168.1.101
+```
+
+## License
+
+MIT

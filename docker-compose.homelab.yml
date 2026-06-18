@@ -1,0 +1,197 @@
+version: "3.9"
+
+# ============================================================================
+# HOMELAB — Docker Services for iknowu.org
+#
+# These services run on the Proxmox host (or a dedicated LXC) alongside
+# the LXC containers (100: NPM, 101: Traefik, 102: Node.js app).
+#
+# Routing is handled by Nginx Proxy Manager (LXC 100) — add proxy hosts
+# in the NPM GUI at http://192.168.1.100:81
+#
+# Quick start:
+#   1. Copy .env.example to .env and fill in your values
+#   2. docker compose -f docker-compose.homelab.yml up -d
+#
+# See README.md for full documentation.
+# ============================================================================
+
+services:
+  # --------------------------------------------------------------------------
+  # POSTGRESQL — Relational Database
+  # --------------------------------------------------------------------------
+  postgresql:
+    image: postgres:16-alpine
+    container_name: homelab-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - homelab-postgres-data:/var/lib/postgresql/data
+    networks:
+      - homelab
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # MONGODB — Document Database
+  # --------------------------------------------------------------------------
+  mongodb:
+    image: mongo:7
+    container_name: homelab-mongodb
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
+      MONGO_INITDB_DATABASE: ${MONGO_DB}
+    volumes:
+      - homelab-mongodb-data:/data/db
+      - homelab-mongodb-config:/data/configdb
+    networks:
+      - homelab
+    expose:
+      - "27017"
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # REDIS — Cache & Session Store
+  # --------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: homelab-redis
+    command: redis-server --requirepass ${REDIS_PASSWORD} --save 60 1 --loglevel warning
+    volumes:
+      - homelab-redis-data:/data
+    networks:
+      - homelab
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # HERMES AGENT — AI Agent Gateway
+  # --------------------------------------------------------------------------
+  hermes-agent:
+    image: nousresearch/hermes-agent:latest
+    container_name: homelab-hermes-agent
+    command: gateway run
+    environment:
+      - HERMES_WEBUI_HOST=0.0.0.0
+      - HERMES_WEBUI_PORT=8787
+      - POSTGRES_URL=postgresql://${POSTGRES_USER}:***@postgresql:5432/${POSTGRES_DB}
+      - MONGODB_URL=mongodb://${MONGO_USER}:***@mongodb:27017/${MONGO_DB}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
+      # Add API keys as needed:
+      # - GITHUB_TOKEN=***      # - OPENAI_API_KEY=${OPEN...Y}
+      # - ANTHROPIC_API_KEY=${ANTH...Y}
+    volumes:
+      - homelab-hermes-home:/home/hermeswebui/.hermes
+    networks:
+      - homelab
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    expose:
+      - "8787"
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # GRAFANA — Monitoring Dashboards
+  # --------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana-oss:latest
+    container_name: homelab-grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAF...D}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=https://${DOMAIN}/grafana
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
+    volumes:
+      - homelab-grafana-data:/var/lib/grafana
+    networks:
+      - homelab
+    depends_on:
+      - postgresql
+    expose:
+      - "3000"
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # PROMETHEUS — Metrics Collection
+  # --------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: homelab-prometheus
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - homelab-prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+    networks:
+      - homelab
+    expose:
+      - "9090"
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # N8N — Workflow Automation
+  # --------------------------------------------------------------------------
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: homelab-n8n
+    environment:
+      - N8N_HOST=${DOMAIN}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=https
+      - N8N_PATH=/n8n/
+      - WEBHOOK_URL=https://${DOMAIN}/n8n/
+      - GENERIC_TIMEZONE=${TZ:-Europe/London}
+    volumes:
+      - homelab-n8n-data:/home/node/.n8n
+    networks:
+      - homelab
+    expose:
+      - "5678"
+    restart: unless-stopped
+
+# =============================================================================
+# VOLUMES — Persistent data
+# =============================================================================
+volumes:
+  homelab-postgres-data:
+  homelab-mongodb-data:
+  homelab-mongodb-config:
+  homelab-redis-data:
+  homelab-hermes-home:
+  homelab-grafana-data:
+  homelab-prometheus-data:
+  homelab-n8n-data:
+
+# =============================================================================
+# NETWORKS
+# =============================================================================
+networks:
+  homelab:
+    driver: bridge
