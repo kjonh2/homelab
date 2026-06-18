@@ -59,27 +59,127 @@ All of this runs on **your hardware**. In your home. Under your control.
 
 Homelab is designed to work everywhere. Pick your device:
 
-| Platform | Status | How |
-|----------|--------|-----|
-| **Linux** | ✅ Ready | `bash setup.sh` — one command |
-| **Windows** | ✅ Ready | Docker Desktop + `setup.sh` |
-| **macOS** | ✅ Ready | Docker Desktop + `setup.sh` |
+| Platform | Status | Install Method |
+|----------|--------|----------------|
+| **Proxmox LXC** | ✅ Ready | One-command script |
+| **Linux (Docker)** | ✅ Ready | One-command script |
+| **Windows (Docker Desktop)** | ✅ Ready | One-command script |
+| **macOS (Docker Desktop)** | ✅ Ready | One-command script |
 | **Android** | 🔜 Coming | App in development |
 | **iOS / iPadOS** | 🔜 Coming | App in development |
 
-### One-Click Install or App — Your Choice
+---
 
-For **Linux, Windows, and macOS**, the setup is a single command that you paste into your terminal. The wizard asks you a few simple questions (like your domain name and a password) and everything configures itself.
+## 💻 Quick Start
 
-> 📝 **"But I don't know what a terminal is!"**
->
-> That's okay. When the mobile apps are ready (Android and iOS), you will be able to set up and manage your entire homelab from your phone — no typing commands, no technical knowledge needed. Just tap, tap, done.
+### 🖥️ Proxmox LXC (Recommended)
 
-The goal is this: **your mom can have an app on her iPhone that connects to her homelab at home, giving her access to all these powerful tools from the palm of her hand.**
+Create a new LXC container on Proxmox (Debian 12 or Ubuntu 22.04), then run:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/kjonh2/homelab/main/scripts/proxmox-install.sh)
+```
+
+This will:
+1. Install Docker + Docker Compose
+2. Clone the repo to `/opt/homelab`
+3. Ask you for your domain name
+4. Generate secure random passwords
+5. Start all services
+6. Show you the URLs to access everything
+
+**Requirements:** LXC with at least 2 vCPU, 4GB RAM, 40GB disk
 
 ---
 
-## 🤔 Why Should I Care?
+### 🐧 Linux (Docker)
+
+On any Linux machine with Docker:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/kjonh2/homelab/main/scripts/proxmox-install.sh)
+```
+
+Or for the interactive wizard:
+
+```bash
+git clone https://github.com/kjonh2/homelab.git /opt/homelab
+cd /opt/homelab
+bash setup.sh
+```
+
+---
+
+### 🪟 Windows (Docker Desktop)
+
+**Prerequisite:** Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) first.
+
+Then in **PowerShell** or **Git Bash**:
+
+```powershell
+# Using PowerShell
+Set-ExecutionPolicy Bypass -Scope Process -Force
+iwr https://raw.githubusercontent.com/kjonh2/homelab/main/scripts/windows-install.ps1 | iex
+```
+
+Or in **Git Bash**:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kjonh2/homelab/main/scripts/windows-install.sh | bash
+```
+
+Or manually:
+
+```powershell
+git clone https://github.com/kjonh2/homelab.git $env:USERPROFILE\homelab
+cd $env:USERPROFILE\homelab
+copy .env.example .env
+notepad .env
+docker compose -f docker-compose.homelab.yml up -d
+```
+
+---
+
+### 🍎 macOS (Docker Desktop)
+
+**Prerequisite:** Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) first.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kjonh2/homelab/main/scripts/windows-install.sh | bash
+```
+
+Or manually:
+
+```bash
+git clone https://github.com/kjonh2/homelab.git ~/homelab
+cd ~/homelab
+cp .env.example .env
+nano .env
+docker compose -f docker-compose.homelab.yml up -d
+```
+
+---
+
+### 📱 Mobile (Coming Soon)
+
+When the mobile apps are ready, you will be able to set up and manage your entire homelab from your phone — no typing commands, no technical knowledge needed. Just tap, tap, done.
+
+> **The goal:** Your mom can have an app on her iPhone that connects to her homelab at home, giving her access to all these powerful tools from the palm of her hand.
+
+---
+
+### After Install
+
+Once running, open your browser:
+
+| Service | Local URL | Via Domain |
+|---------|-----------|------------|
+| 🤖 Hermes AI | `http://localhost:8787` | `https://yourdomain.com/hermes` |
+| 📊 Grafana | `http://localhost:3000` | `https://yourdomain.com/grafana` |
+| 📈 Prometheus | `http://localhost:9090` | `https://yourdomain.com/prometheus` |
+| ⚡ N8N | `http://localhost:5678` | `https://yourdomain.com/n8n` |
+
+To access via your domain, add proxy hosts in Nginx Proxy Manager pointing to your server's IP.
 
 ### The Problem
 
@@ -195,57 +295,6 @@ Managed via Docker Compose on the Proxmox host or a dedicated VM:
 | Grafana | `grafana/grafana-oss` | Monitoring dashboards |
 | Prometheus | `prom/prometheus` | Metrics collection |
 | N8N | `n8nio/n8n` | Workflow automation |
-
----
-
-## 💻 Quick Start
-
-### Prerequisites
-
-- A computer or server (even an old laptop works!)
-- Linux / Windows / macOS with Docker installed
-- A domain name (optional — works on local network too)
-
-### Install
-
-**Option A — Interactive Setup (recommended):**
-
-```bash
-git clone https://github.com/kjonh2/homelab.git /opt/homelab
-cd /opt/homelab
-bash setup.sh
-```
-
-Answer a few questions and you're done.
-
-**Option B — Fully Automatic:**
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/kjonh2/homelab/main/install.sh | bash
-```
-
-This installs Docker, clones the repo, generates secure passwords, and starts everything.
-
-**Option C — Manual:**
-
-```bash
-git clone https://github.com/kjonh2/homelab.git /opt/homelab
-cd /opt/homelab
-cp .env.example .env
-nano .env
-docker compose -f docker-compose.homelab.yml up -d
-```
-
-### After Install
-
-Open your browser:
-
-| Service | URL |
-|---------|-----|
-| Hermes AI | `http://localhost:8787` |
-| Grafana | `http://localhost:3000` |
-| Prometheus | `http://localhost:9090` |
-| N8N | `http://localhost:5678` |
 
 ---
 
