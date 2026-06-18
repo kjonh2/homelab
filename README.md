@@ -1,260 +1,214 @@
-# 🏠 Homelab — Self-Hosted Infrastructure
+<!-- README.md — HOMELAB -->
+<!-- Designed to be welcoming to everyone, from beginners to advanced users. -->
 
-Self-hosted infrastructure on Proxmox with LXC containers, Traefik SSL termination, Nginx Proxy Manager for routing, and Docker services for databases, AI, and monitoring.
+<h1 align="center">
+  <br>
+  <img src="https://img.icons8.com/fluency/96/house.png" alt="Homelab" width="80">
+  <br>
+  🏠 Homelab — One Click Deploy
+  <br>
+</h1>
 
-## Architecture
+<h4 align="center">
+  Self-hosted infrastructure for everyone. No tech skills required.
+</h4>
+
+<p align="center">
+  <a href="#quick-start">Quick Start</a> •
+  <a href="#what-you-get">What You Get</a> •
+  <a href="#platforms">Platforms</a> •
+  <a href="#why">Why?</a> •
+  <a href="#how-it-works">How It Works</a> •
+  <a href="#technical">Technical Details</a> •
+  <a href="#contribute">Contribute</a>
+</p>
+
+---
+
+## 🌟 What Is This?
+
+**Homelab in one click.**
+
+This project exists to simplify the life of anyone who wants to evolve with AI but is afraid of touching a computer. With one simple install, you will have your own **private homelab** — no need to pay any company for cloud services, no data leaving your home, no monthly fees.
+
+> **Your data. Your rules. Your AI. At home.**
+
+This project is designed to be accessible to **everyone**. Your mom, your kids, your grandma — anyone should be able to set up their own homelab. If you can tap a button, you can run this.
+
+---
+
+## 🚀 What You Get
+
+After one simple install, you have your own private cloud running at home:
+
+| Service | What It Does | Access |
+|---------|-------------|--------|
+| 🤖 **Hermes AI** | Your personal AI assistant — private, always available, remembers everything | Web browser |
+| 📊 **Grafana** | Beautiful dashboards to monitor everything | Web browser |
+| 📈 **Prometheus** | Collects metrics so you know how healthy your system is | Web browser |
+| ⚡ **N8N** | Automate tasks between apps — no coding needed | Web browser |
+| 🐘 **PostgreSQL** | Relational database for your apps | Internal |
+| 🍃 **MongoDB** | Document database for flexible data | Internal |
+| 🔴 **Redis** | Fast cache and session storage | Internal |
+
+All of this runs on **your hardware**. In your home. Under your control.
+
+---
+
+## 📱 Choose Your Platform
+
+Homelab is designed to work everywhere. Pick your device:
+
+| Platform | Status | How |
+|----------|--------|-----|
+| **Linux** | ✅ Ready | `bash setup.sh` — one command |
+| **Windows** | ✅ Ready | Docker Desktop + `setup.sh` |
+| **macOS** | ✅ Ready | Docker Desktop + `setup.sh` |
+| **Android** | 🔜 Coming | App in development |
+| **iOS / iPadOS** | 🔜 Coming | App in development |
+
+### One-Click Install or App — Your Choice
+
+For **Linux, Windows, and macOS**, the setup is a single command that you paste into your terminal. The wizard asks you a few simple questions (like your domain name and a password) and everything configures itself.
+
+> 📝 **"But I don't know what a terminal is!"**
+>
+> That's okay. When the mobile apps are ready (Android and iOS), you will be able to set up and manage your entire homelab from your phone — no typing commands, no technical knowledge needed. Just tap, tap, done.
+
+The goal is this: **your mom can have an app on her iPhone that connects to her homelab at home, giving her access to all these powerful tools from the palm of her hand.**
+
+---
+
+## 🤔 Why Should I Care?
+
+### The Problem
+
+Today, if you want to use AI, you have two options:
+
+1. **Pay a company** (OpenAI, Google, etc.) — they store your data, they control what you can do, and you pay monthly forever.
+2. **Learn to code and set up servers yourself** — takes months, requires deep technical knowledge, and one mistake can break everything.
+
+### The Solution
+
+**Homelab gives you option 3:** Your own private AI and services, running at home, on your terms.
+
+- 🔒 **100% Private** — Your data never leaves your home
+- 💰 **No monthly fees** — Run it on hardware you already own
+- 🧠 **AI that knows you** — Hermes remembers your preferences, your projects, your life
+- 📱 **Access anywhere** — From your phone, tablet, laptop — anything with a browser
+- 🔧 **Grow as you learn** — Start basic, add more as you're ready
+
+### Who Is This For?
+
+- **Beginners** who want AI without complexity
+- **Families** who want a private AI at home
+- **Students** who want to learn with real tools
+- **Developers** who want full control
+- **Privacy-conscious people** who don't trust big tech
+- **Tinkerers** who love building things at home
+
+---
+
+## 🏠 How It Works — The Simple Version
+
+Here's what happens when you install:
+
+```
+1. You run one command
+         │
+         ▼
+2. The wizard asks you 3 simple questions
+   → What's your domain? (or use free one we provide)
+   → What password do you want?
+   → Which services do you want? (all recommended)
+         │
+         ▼
+3. Everything installs automatically
+   → Docker sets up the containers
+   → Services connect to each other
+   → Health checks confirm everything works
+         │
+         ▼
+4. ✅ Done! Open your browser and use it.
+```
+
+No coding. No Linux knowledge. No frustration.
+
+---
+
+## 🏗️ How It Works — Architecture
+
+For those who want to understand the full setup:
 
 ```
                          Internet
                             │
                             ▼
               ┌─────────────────────────┐
-              │   DNS (your provider)   │
+              │   Your DNS Provider     │
               │   (example.com)         │
               └────────────┬────────────┘
                            │
                            ▼
               ┌─────────────────────────┐
-              │   LXC 101 — Traefik     │
-              │   Ports: 80, 443        │
+              │   Traefik (LXC 101)     │
               │   SSL termination       │
-              │   Auto-renew (Let's     │
-              │   Encrypt)              │
+              │   Ports: 80, 443        │
               └────────────┬────────────┘
                            │
                            ▼
               ┌─────────────────────────┐
-              │   LXC 100 — Nginx       │
-              │   Proxy Manager         │
-              │   Port: 81 (admin)      │
+              │   Nginx Proxy Manager   │
+              │   (LXC 100)             │
               │   GUI-based routing     │
+              │   Admin: :81            │
               └────────────┬────────────┘
                            │
           ┌────────────────┼────────────────┐
           │                │                │
           ▼                ▼                ▼
    ┌────────────┐  ┌────────────┐  ┌────────────┐
-   │ LXC 102    │  │ Docker     │  │ Future     │
-   │ Node.js    │  │ Services   │  │ services   │
-   │ App        │  │ (this repo)│  │            │
-   │ example.com│  │            │  │            │
+   │ Node.js    │  │ Docker     │  │ Future     │
+   │ App        │  │ Services   │  │ services   │
+   │ (LXC 102)  │  │ (this repo)│  │            │
    └────────────┘  └────────────┘  └────────────┘
 ```
 
-## Infrastructure
+### LXC Containers
 
-### Proxmox Host
+| ID | Container | Purpose |
+|----|-----------|---------|
+| 100 | Nginx Proxy Manager | Internal GUI-based routing — point and click |
+| 101 | Traefik | Entry point — handles SSL certificates automatically |
+| 102 | Node.js App | Your main website/application |
 
-| LXC | Name | IP | Purpose |
-|-----|------|----|---------|
-| 100 | nginx-proxy-manager | 192.168.1.100 | Reverse proxy with GUI |
-| 101 | traefik | 192.168.1.101 | SSL termination & entry point |
-| 102 | nodejs-app | 192.168.1.102 | Main website (Node.js) |
+### Docker Services
 
-### Planned Docker Services
+Managed via Docker Compose on the Proxmox host or a dedicated VM:
 
-These will be added to the Proxmox host (or a dedicated LXC) as Docker containers:
+| Service | Image | Purpose |
+|---------|-------|---------|
+| Hermes Agent | `nousresearch/hermes-agent` | AI assistant + WebUI |
+| PostgreSQL | `postgres:16-alpine` | Relational database |
+| MongoDB | `mongo:7` | Document database |
+| Redis | `redis:7-alpine` | Cache |
+| Grafana | `grafana/grafana-oss` | Monitoring dashboards |
+| Prometheus | `prom/prometheus` | Metrics collection |
+| N8N | `n8nio/n8n` | Workflow automation |
 
-| Service | Purpose | Image |
-|---------|---------|-------|
-| PostgreSQL | Relational database | `postgres:16-alpine` |
-| MongoDB | Document database | `mongo:7` |
-| Redis | Cache & sessions | `redis:7-alpine` |
-| Hermes Agent | AI agent gateway | `nousresearch/hermes-agent` |
-| Grafana | Monitoring dashboards | `grafana/grafana-oss` |
-| Prometheus | Metrics collection | `prom/prometheus` |
-| N8N | Workflow automation | `n8nio/n8n` |
+---
 
-## Traefik (LXC 101) — Entry Point
+## 💻 Quick Start
 
-Traefik receives all traffic on ports 80/443, handles SSL, and forwards to Nginx Proxy Manager.
+### Prerequisites
 
-### Setup
+- A computer or server (even an old laptop works!)
+- Linux / Windows / macOS with Docker installed
+- A domain name (optional — works on local network too)
 
-```bash
-# On LXC 101
-apt update && apt install docker.io docker-compose -y
+### Install
 
-# Create directories
-mkdir -p /opt/traefik
-
-# Start
-docker compose -f /opt/traefik/docker-compose.yml up -d
-```
-
-### Configuration
-
-**`/opt/traefik/docker-compose.yml`:**
-
-```yaml
-version: "3.9"
-
-services:
-  traefik:
-    image: traefik:v3.7
-    container_name: traefik
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./letsencrypt:/letsencrypt
-      - ./traefik.yml:/traefik.yml:ro
-      - ./dynamic.yml:/dynamic.yml:ro
-    networks:
-      - proxy
-
-networks:
-  proxy:
-    external: true
-```
-
-**`/opt/traefik/traefik.yml`:**
-
-```yaml
-global:
-  checkNewVersion: false
-  sendAnonymousUsage: false
-
-api:
-  insecure: true
-  dashboard: true
-
-entryPoints:
-  web:
-    address: ":80"
-    http:
-      redirections:
-        entryPoint:
-          to: websecure
-          scheme: https
-  websecure:
-    address: ":443"
-
-providers:
-  file:
-    filename: /dynamic.yml
-    watch: true
-
-certificatesResolvers:
-  letsencrypt:
-    acme:
-      email: admin@example.com
-      storage: /letsencrypt/acme.json
-      httpChallenge:
-        entryPoint: web
-
-log:
-  level: INFO
-```
-
-**`/opt/traefik/dynamic.yml`:**
-
-```yaml
-http:
-  routers:
-    # Forward everything to Nginx Proxy Manager
-    to-npm:
-      rule: "HostRegexp(`{host:.+}`)"
-      service: npm
-      entryPoints: [web, websecure]
-      tls:
-        certResolver: letsencrypt
-      priority: 1
-
-  services:
-    npm:
-      loadBalancer:
-        servers:
-          - url: "http://192.168.1.100:80"
-```
-
-### Create Docker Network
-
-```bash
-docker network create proxy
-```
-
-## Nginx Proxy Manager (LXC 100) — Internal Routing
-
-NPM handles all internal routing via its web GUI. Access at `http://192.168.1.100:81`.
-
-### Setup
-
-```bash
-# On LXC 100
-apt update && apt install docker.io docker-compose -y
-mkdir -p /opt/npm
-```
-
-**`/opt/npm/docker-compose.yml`:**
-
-```yaml
-version: "3.9"
-
-services:
-  npm:
-    image: jc21/nginx-proxy-manager:latest
-    container_name: npm
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "81:81"     # Admin GUI
-      - "443:443"
-    volumes:
-      - ./data:/data
-      - ./letsencrypt:/etc/letsencrypt
-    environment:
-      - DB_SQLITE_FILE=/data/database.sqlite
-```
-
-### NPM Proxy Hosts
-
-Configure these in the NPM GUI (`http://192.168.1.100:81`):
-
-| Domain | Forward To | Port | Scheme |
-|--------|-----------|------|--------|
-| `example.com` | 192.168.1.102 | 3000 | http |
-| `www.example.com` | 192.168.1.102 | 3000 | http |
-| `traefik.example.com` | 192.168.1.101 | 8080 | http |
-
-Default login: `admin@example.com` / `changeme`
-
-## Node.js App (LXC 102) — Main Website
-
-Your Node.js application serving `example.com`.
-
-### Setup
-
-```bash
-# On LXC 102
-apt update && apt install nodejs npm -y
-mkdir -p /opt/app
-```
-
-**`/opt/app/docker-compose.yml`:**
-
-```yaml
-version: "3.9"
-
-services:
-  app:
-    build: .
-    container_name: nodejs-app
-    restart: unless-stopped
-    expose:
-      - "3000"
-    environment:
-      - NODE_ENV=production
-      - PORT=3000
-```
-
-## Docker Services
-
-Deploy databases, AI, and monitoring on the Proxmox host or a dedicated VM:
-
-### Quick install (interactive)
+**Option A — Interactive Setup (recommended):**
 
 ```bash
 git clone https://github.com/kjonh2/homelab.git /opt/homelab
@@ -262,15 +216,17 @@ cd /opt/homelab
 bash setup.sh
 ```
 
-The wizard will ask you for domain, passwords, API keys, and which services to deploy.
+Answer a few questions and you're done.
 
-### Automated (one command)
+**Option B — Fully Automatic:**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kjonh2/homelab/main/install.sh | bash
 ```
 
-### Manual
+This installs Docker, clones the repo, generates secure passwords, and starts everything.
+
+**Option C — Manual:**
 
 ```bash
 git clone https://github.com/kjonh2/homelab.git /opt/homelab
@@ -280,38 +236,185 @@ nano .env
 docker compose -f docker-compose.homelab.yml up -d
 ```
 
-## DNS Configuration
+### After Install
 
-Point your domain to the server:
+Open your browser:
 
-| Type | Name | Value |
-|------|------|-------|
-| A | `example.com` | `<your-server-ip>` |
-| A | `www` | `<your-server-ip>` |
-| A | `traefik` | `<your-server-ip>` |
+| Service | URL |
+|---------|-----|
+| Hermes AI | `http://localhost:8787` |
+| Grafana | `http://localhost:3000` |
+| Prometheus | `http://localhost:9090` |
+| N8N | `http://localhost:5678` |
 
-## Adding New Services
+---
 
-1. Deploy the service (Docker container on Proxmox or new LXC)
-2. Add a Proxy Host in NPM GUI pointing to the service IP:port
-3. SSL is handled automatically by Traefik → NPM
+## 🔒 Your Data — Where It Lives
 
-## Troubleshooting
+Everything is stored in Docker volumes on your machine:
 
-```bash
-# Check Traefik
-docker logs -f traefik
+| Volume | What's Stored |
+|--------|--------------|
+| `homelab-hermes-home` | AI sessions, memories, skills, config |
+| `homelab-postgres-data` | All PostgreSQL databases |
+| `homelab-mongodb-data` | All MongoDB databases |
+| `homelab-redis-data` | Cached data |
+| `homelab-grafana-data` | Dashboards and settings |
+| `homelab-prometheus-data` | Metrics history (30 days) |
+| `homelab-n8n-data` | Workflows and credentials |
 
-# Check NPM
-docker logs -f npm
+All data survives container restarts. For backups, see the [backup section](#backup) below.
 
-# Check Node.js app
-docker logs -f nodejs-app
+---
 
-# Test routing
-curl -H "Host: example.com" http://192.168.1.101
+## 🌐 Access From Your Phone (and Anywhere)
+
+Once your homelab is running, you can access it from **any device**:
+
+1. **Same network:** Just open `http://<your-server-ip>:8787` in any browser
+2. **From anywhere:** Set up port forwarding on your router, or use a VPN
+3. **With your domain:** Point your DNS to your server's IP — Traefik handles the rest with automatic SSL
+
+Coming soon: **mobile apps** for Android and iOS that give you a native experience without needing to type URLs.
+
+---
+
+## 📸 Demos
+
+<details>
+<summary>🖼️ Click to see screenshots</summary>
+
+*(Screenshots and demo images will be added here — send them to the maintainer and they'll get updated)*
+
+### Hermes AI WebUI
+> Your personal AI, always available, completely private.
+
+### Grafana Dashboard
+> Beautiful monitoring for your entire homelab.
+
+### N8N Workflows
+> Automate anything — no coding required.
+
+</details>
+
+---
+
+## 🔧 Technical Details
+
+<details>
+<summary>For developers and contributors — click to expand</summary>
+
+### Project Structure
+
+```
+homelab/
+├── docker-compose.homelab.yml    # Main Docker Compose file
+├── setup.sh                      # Interactive setup wizard
+├── install.sh                    # One-command automated installer
+├── .env.example                  # Environment variable template
+├── .gitignore
+├── README.md                     # This file
+├── GEMINI.md                     # AI context for contributors
+├── traefik/
+│   ├── traefik.yml               # Traefik static config (for LXC 101)
+│   └── traefik-dynamic.yml       # Traefik routing rules
+└── prometheus/
+    └── prometheus.yml            # Prometheus scrape config
 ```
 
-## License
+### Requirements
 
-MIT
+- Docker 20.10+
+- Docker Compose v2+
+- Minimum 4GB RAM (8GB recommended)
+- 40GB disk space
+- Ports 80 and 443 open (for SSL)
+
+### Adding New Services
+
+1. Add the service definition to `docker-compose.homelab.yml`
+2. Add environment variables to `.env.example`
+3. Add a Proxy Host in Nginx Proxy Manager GUI
+4. Submit a pull request!
+
+### Backup
+
+```bash
+# Backup everything
+cd /opt/homelab
+docker compose -f docker-compose.homelab.yml down
+docker run --rm \
+  -v homelab-hermes-home:/data/hermes \
+  -v homelab-postgres-data:/data/postgres \
+  -v homelab-mongodb-data:/data/mongo \
+  -v homelab-redis-data:/data/redis \
+  -v homelab-grafana-data:/data/grafana \
+  -v homelab-prometheus-data:/data/prometheus \
+  -v homelab-n8n-data:/data/n8n \
+  -v /backup:/backup \
+  alpine tar czf /backup/homelab-full-$(date +%Y%m%d).tar.gz -C /data .
+docker compose -f docker-compose.homelab.yml up -d
+```
+
+### Updating
+
+```bash
+cd /opt/homelab
+git pull origin main
+docker compose -f docker-compose.homelab.yml up -d --force-recreate
+```
+
+### Contributing
+
+This project welcomes contributions of all kinds:
+
+- 🐛 Report bugs via Issues
+- 💡 Suggest features
+- 🌐 Translate documentation
+- 📱 Help build mobile apps
+- 🔧 Add new services to the Docker Compose
+- 📖 Improve this README
+
+See [GEMINI.md](GEMINI.md) for detailed technical context.
+
+</details>
+
+---
+
+## 🤝 Contribute
+
+This project is open source and welcomes everyone:
+
+- **Not technical?** Report bugs, suggest features, help with documentation
+- **Developer?** Add services, improve scripts, build integrations
+- **Designer?** Create UI mockups, improve the mobile app experience
+- **Translator?** Help translate this README into your language
+
+Every contribution matters. The goal is to make this accessible to **everyone**.
+
+---
+
+## ❤️ Philosophy
+
+> Technology should serve people, not the other way around.
+
+This project was born from the belief that AI and powerful tools should not be locked behind monthly subscriptions, complex setups, or corporate gatekeeping. Every person deserves to have their own AI assistant, their own automation tools, and their own data — without needing a computer science degree.
+
+If your mom can use an iPhone, she deserves to have an AI that helps her. This project is built to make that possible.
+
+---
+
+## 📄 License
+
+MIT — Use it, modify it, share it. Just be kind.
+
+---
+
+<p align="center">
+  <strong>🌟 Star this repo if it helped you!</strong><br>
+  <a href="https://github.com/kjonh2/homelab">github.com/kjonh2/homelab</a>
+</p>
+
+---
+
+<sub>Built with ❤️ for everyone — from beginners to experts.</sub>
