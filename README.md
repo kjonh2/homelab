@@ -14,13 +14,14 @@
 </h4>
 
 <p align="center">
-  <a href="#quick-start">Quick Start</a> •
-  <a href="#what-you-get">What You Get</a> •
-  <a href="#platforms">Platforms</a> •
-  <a href="#why">Why?</a> •
-  <a href="#how-it-works">How It Works</a> •
-  <a href="#technical">Technical Details</a> •
-  <a href="#contribute">Contribute</a>
+  <a href="#-what-is-this">What Is This?</a> •
+  <a href="#-what-you-get">What You Get</a> •
+  <a href="#-demo">Demo</a> •
+  <a href="#-choose-your-platform">Platforms</a> •
+  <a href="#-quick-start">Quick Start</a> •
+  <a href="#-why-should-i-care">Why?</a> •
+  <a href="#-technical">Technical</a> •
+  <a href="#-contribute">Contribute</a>
 </p>
 
 ---
@@ -52,6 +53,16 @@ After one simple install, you have your own private cloud running at home:
 | 🔴 **Redis** | Fast cache and session storage | Internal |
 
 All of this runs on **your hardware**. In your home. Under your control.
+
+---
+
+## 📸 Demo
+
+Here's what your homelab looks like running:
+
+![Docker Homelab Containers](docs/images/demo-docker-homelab.png)
+
+*All services running in Docker containers — one command, fully operational.*
 
 ---
 
@@ -128,16 +139,6 @@ Or in **Git Bash**:
 curl -fsSL https://raw.githubusercontent.com/kjonh2/homelab/main/scripts/windows-install.sh | bash
 ```
 
-Or manually:
-
-```powershell
-git clone https://github.com/kjonh2/homelab.git $env:USERPROFILE\homelab
-cd $env:USERPROFILE\homelab
-copy .env.example .env
-notepad .env
-docker compose -f docker-compose.homelab.yml up -d
-```
-
 ---
 
 ### 🍎 macOS (Docker Desktop)
@@ -146,16 +147,6 @@ docker compose -f docker-compose.homelab.yml up -d
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kjonh2/homelab/main/scripts/windows-install.sh | bash
-```
-
-Or manually:
-
-```bash
-git clone https://github.com/kjonh2/homelab.git ~/homelab
-cd ~/homelab
-cp .env.example .env
-nano .env
-docker compose -f docker-compose.homelab.yml up -d
 ```
 
 ---
@@ -180,6 +171,10 @@ Once running, open your browser:
 | ⚡ N8N | `http://localhost:5678` | `https://yourdomain.com/n8n` |
 
 To access via your domain, add proxy hosts in Nginx Proxy Manager pointing to your server's IP.
+
+---
+
+## 🤔 Why Should I Care?
 
 ### The Problem
 
@@ -328,26 +323,6 @@ Coming soon: **mobile apps** for Android and iOS that give you a native experien
 
 ---
 
-## 📸 Demos
-
-<details>
-<summary>🖼️ Click to see screenshots</summary>
-
-*(Screenshots and demo images will be added here — send them to the maintainer and they'll get updated)*
-
-### Hermes AI WebUI
-> Your personal AI, always available, completely private.
-
-### Grafana Dashboard
-> Beautiful monitoring for your entire homelab.
-
-### N8N Workflows
-> Automate anything — no coding required.
-
-</details>
-
----
-
 ## 🔧 Technical Details
 
 <details>
@@ -364,11 +339,17 @@ homelab/
 ├── .gitignore
 ├── README.md                     # This file
 ├── GEMINI.md                     # AI context for contributors
+├── scripts/
+│   ├── proxmox-install.sh        # Proxmox LXC / Linux installer
+│   ├── windows-install.sh        # Windows Git Bash installer
+│   └── windows-install.ps1       # Windows PowerShell installer
 ├── traefik/
-│   ├── traefik.yml               # Traefik static config (for LXC 101)
 │   └── traefik-dynamic.yml       # Traefik routing rules
-└── prometheus/
-    └── prometheus.yml            # Prometheus scrape config
+├── prometheus/
+│   └── prometheus.yml            # Prometheus scrape config
+└── docs/
+    └── images/
+        └── demo-docker-homelab.png
 ```
 
 ### Requirements
