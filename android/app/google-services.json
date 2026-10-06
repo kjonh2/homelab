@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "236445727519",
+    "project_id": "local-44782",
+    "storage_bucket": "local-44782.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:236445727519:android:40ba204c0b2912d7368e2a",
+        "android_client_info": {
+          "package_name": "com.iknowu.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "236445727519-q71ebq67rabrqqp95i6r4f8bqe0cgpb8.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.iknowu.app",
+            "certificate_hash": "6f82e227bc0b3c7400ae882bf34de1da92a1c1e3"
+          }
+        },
+        {
+          "client_id": "236445727519-ig62uctn5hrn5jgj5rjfjofmm1k85q61.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAIj9Dn72niHSg7jkZmhmoCViiO2m78194"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "236445727519-ig62uctn5hrn5jgj5rjfjofmm1k85q61.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -1,0 +1,3 @@
+C:/Users/kjonh/AndroidStudioProjects/IKnowU/app/.cxx/Debug/b4j482y2/x86_64/CMakeFiles/iknowu.dir
+C:/Users/kjonh/AndroidStudioProjects/IKnowU/app/.cxx/Debug/b4j482y2/x86_64/CMakeFiles/edit_cache.dir
+C:/Users/kjonh/AndroidStudioProjects/IKnowU/app/.cxx/Debug/b4j482y2/x86_64/CMakeFiles/rebuild_cache.dir

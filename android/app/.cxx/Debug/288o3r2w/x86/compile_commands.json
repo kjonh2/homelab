@@ -1,0 +1,7 @@
+[
+{
+  "directory": "C:/Users/kjonh/AndroidStudioProjects/IKnowU/app/.cxx/Debug/288o3r2w/x86",
+  "command": "C:\\Users\\kjonh\\AppData\\Local\\Android\\Sdk\\ndk\\28.2.13676358\\toolchains\\llvm\\prebuilt\\windows-x86_64\\bin\\clang++.exe --target=i686-none-linux-android21 --sysroot=C:/Users/kjonh/AppData/Local/Android/Sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/windows-x86_64/sysroot -Diknowu_EXPORTS -g -DANDROID -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -mstackrealign -D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security   -fno-limit-debug-info  -fPIC -o CMakeFiles\\iknowu.dir\\native-lib.cpp.o -c C:\\Users\\kjonh\\AndroidStudioProjects\\IKnowU\\app\\src\\main\\cpp\\native-lib.cpp",
+  "file": "C:\\Users\\kjonh\\AndroidStudioProjects\\IKnowU\\app\\src\\main\\cpp\\native-lib.cpp"
+}
+]

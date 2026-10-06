@@ -1,0 +1,27 @@
+{
+  "buildFiles": [
+    "C:\\Users\\kjonh\\AndroidStudioProjects\\IKnowU\\app\\src\\main\\cpp\\CMakeLists.txt"
+  ],
+  "cleanCommandsComponents": [
+    [
+      "C:\\Users\\kjonh\\AppData\\Local\\Android\\Sdk\\cmake\\3.22.1\\bin\\ninja.exe",
+      "-C",
+      "C:\\Users\\kjonh\\AndroidStudioProjects\\IKnowU\\app\\.cxx\\Debug\\1ig6t4f6\\x86",
+      "clean"
+    ]
+  ],
+  "buildTargetsCommandComponents": [
+    "C:\\Users\\kjonh\\AppData\\Local\\Android\\Sdk\\cmake\\3.22.1\\bin\\ninja.exe",
+    "-C",
+    "C:\\Users\\kjonh\\AndroidStudioProjects\\IKnowU\\app\\.cxx\\Debug\\1ig6t4f6\\x86",
+    "{LIST_OF_TARGETS_TO_BUILD}"
+  ],
+  "libraries": {
+    "iknowu::@6890427a1f51a3e7e1df": {
+      "artifactName": "iknowu",
+      "abi": "x86",
+      "output": "C:\\Users\\kjonh\\AndroidStudioProjects\\IKnowU\\app\\build\\intermediates\\cxx\\Debug\\1ig6t4f6\\obj\\x86\\libiknowu.so",
+      "runtimeFiles": []
+    }
+  }
+}

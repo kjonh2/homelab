@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">I Know U</string>
+
+    <!-- Firebase Web Client ID (from google-services.json) -->
+    <string name="default_web_client_id">236445727519-ig62uctn5hrn5jgj5rjfjofmm1k85q61.apps.googleusercontent.com</string>
+
+    <!-- Login -->
+    <string name="login_title">I Know U</string>
+    <string name="login_subtitle">Entra na tua conta</string>
+    <string name="hint_email">Email</string>
+    <string name="hint_password">Password</string>
+    <string name="forgot_password">Esqueci-me da password</string>
+    <string name="btn_login">Entrar</string>
+    <string name="btn_google_signin">Entrar com Google</string>
+    <string name="no_account">Não tens conta?</string>
+    <string name="register">Regista-te</string>
+
+    <!-- Register -->
+    <string name="register_title">Criar Conta</string>
+    <string name="register_subtitle">Regista-te para começar</string>
+    <string name="hint_name">Nome</string>
+    <string name="hint_confirm_password">Confirmar Password</string>
+    <string name="btn_register">Registar</string>
+    <string name="has_account">Já tens conta?</string>
+    <string name="login">Entrar</string>
+
+    <!-- Messages -->
+    <string name="error_email_empty">Por favor, introduz o email</string>
+    <string name="error_password_empty">Por favor, introduz a password</string>
+    <string name="error_password_short">A password deve ter pelo menos 6 caracteres</string>
+    <string name="error_passwords_mismatch">As passwords não coincidem</string>
+    <string name="error_name_empty">Por favor, introduz o teu nome</string>
+    <string name="login_success">Login efetuado com sucesso!</string>
+    <string name="register_success">Conta criada com sucesso!</string>
+    <string name="password_reset_sent">Email de recuperação enviado!</string>
+    <string name="error_auth_failed">Falha na autenticação. Verifica os teus dados.</string>
+    <string name="error_register_failed">Falha no registo. Tenta novamente.</string>
+    <string name="error_google_signin">Falha no login com Google.</string>
+    <string name="error_user_not_logged_in">Utilizador não autenticado</string>
+</resources>

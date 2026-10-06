@@ -1,0 +1,6 @@
+# ninja log v5
+1	3697	8031068839704146	CMakeFiles/iknowu.dir/native-lib.cpp.o	8f4a060faccc26a3
+3713	3944	8031068842371082	C:/Users/kjonh/AndroidStudioProjects/IKnowU/app/build/intermediates/cxx/Debug/39x323r2/obj/x86/libiknowu.so	74dbdb3c84ca25f8
+0	17	0	clean	782fa50a64a6e7b4
+17	2441	8031145237033867	CMakeFiles/iknowu.dir/native-lib.cpp.o	8f4a060faccc26a3
+2442	2717	8031145239467694	C:/Users/kjonh/AndroidStudioProjects/IKnowU/app/build/intermediates/cxx/Debug/39x323r2/obj/x86/libiknowu.so	74dbdb3c84ca25f8
