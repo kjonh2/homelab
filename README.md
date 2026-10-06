@@ -76,7 +76,7 @@ Homelab is designed to work everywhere. Pick your device:
 | **Linux (Docker)** | ✅ Ready | One-command script |
 | **Windows (Docker Desktop)** | ✅ Ready | One-command script |
 | **macOS (Docker Desktop)** | ✅ Ready | One-command script |
-| **Android** | 🔜 Coming | App in development |
+| **Android** | 🔨 In development | App in development — see [`android/`](./android) |
 | **iOS / iPadOS** | 🔜 Coming | App in development |
 
 ---
