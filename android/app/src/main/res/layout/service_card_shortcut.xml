@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Card de um serviço (ícone, nome, estado opcional). Estética dark/purple. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="0dp"
+    android:layout_height="wrap_content"
+    android:background="@drawable/service_bg_card"
+    android:foreground="?android:attr/selectableItemBackground"
+    android:padding="16dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <!-- Ícone do serviço -->
+        <FrameLayout
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="@drawable/service_bg_icon">
+
+            <ImageView
+                android:id="@+id/icServico"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:layout_gravity="center"
+                android:importantForAccessibility="no"
+                app:srcCompat="@drawable/service_icon_generic"
+                app:tint="@color/dark_text" />
+        </FrameLayout>
+
+        <!-- Nome do serviço -->
+        <TextView
+            android:id="@+id/nomeServico"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:textColor="@color/dark_text"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            tools:text="Hermes" />
+
+        <!-- Descrição curta opcional -->
+        <TextView
+            android:id="@+id/descServico"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textColor="@color/services_texto_suave"
+            android:textSize="12sp"
+            android:visibility="gone"
+            tools:text="Agente de IA" />
+
+        <!-- Estado opcional (ponto + texto) -->
+        <LinearLayout
+            android:id="@+id/estadoLinha"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <View
+                android:id="@+id/estadoDot"
+                android:layout_width="8dp"
+                android:layout_height="8dp"
+                android:background="@drawable/service_estado_dot" />
+
+            <TextView
+                android:id="@+id/estadoTexto"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:textColor="@color/services_texto_suave"
+                android:textSize="11sp"
+                tools:text="Online" />
+        </LinearLayout>
+
+    </LinearLayout>
+</FrameLayout>

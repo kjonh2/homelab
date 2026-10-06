@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/nav_inicio"
+        android:icon="@drawable/nav_home"
+        android:title="Início" />
+    <item
+        android:id="@+id/nav_impressora"
+        android:icon="@drawable/nav_printer"
+        android:title="Impressora" />
+    <item
+        android:id="@+id/nav_servicos"
+        android:icon="@drawable/nav_services"
+        android:title="Serviços" />
+    <item
+        android:id="@+id/nav_ficheiros"
+        android:icon="@drawable/nav_files"
+        android:title="Ficheiros" />
+    <item
+        android:id="@+id/nav_perfil"
+        android:icon="@drawable/nav_profile"
+        android:title="Perfil" />
+</menu>

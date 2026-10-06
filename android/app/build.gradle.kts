@@ -83,6 +83,9 @@ android {
 }
 
 dependencies {
+    // HomeStatus — cliente HTTP do estado do homelab (Prometheus)
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
     // AppCompat
     "slateImplementation"("androidx.appcompat:appcompat:1.6.1")
     "legacyImplementation"("androidx.appcompat:appcompat:1.6.1")

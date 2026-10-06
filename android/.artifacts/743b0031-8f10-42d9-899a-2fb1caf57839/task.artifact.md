@@ -1,0 +1,6 @@
+- [x] Update `applicationId` and remove suffixes in `app/build.gradle.kts`
+- [x] Verify build with `gradle_assemble_all` (failed with minSdk 16 < 23)
+- [x] Fix minSdk mismatch in `app/build.gradle.kts` (bumped to 23)
+- [x] Handle adaptive icon resource failure (moved to `-v26`)
+- [x] Run `gradle_sync`
+- [x] Create walkthrough

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Estado do homelab (HomeStatusFragment) — PT-PT -->
+    <string name="home_status_updating">A atualizar…</string>
+    <string name="home_status_updated_at">Atualizado às %1$s · atualiza a cada 10 s</string>
+    <string name="home_status_offline">Sem ligação ao homelab</string>
+    <string name="home_status_error">Erro: %1$s</string>
+    <string name="home_status_containers_value">%1$d / %2$d</string>
+    <string name="home_status_no_services">Sem dados de serviços</string>
+    <string name="home_status_uptime_value">%1$d dias, %2$d h</string>
+    <string name="home_status_no_disks">Sem dados de discos</string>
+    <string name="home_status_disk_line">%1$s · %2$s usados (%3$s de %4$s)</string>
+    <string name="home_status_disk_alert">⚠ Disco quase cheio: %1$s (&gt;90 %%)</string>
+    <string name="home_status_no_shares">Sem partilhas configuradas</string>
+    <string name="home_status_share_probing">a verificar…</string>
+    <string name="home_status_share_online">online</string>
+    <string name="home_status_share_offline">offline</string>
+    <string name="home_status_share_open">Abrir</string>
+    <string name="home_status_share_no_app">Sem gestor de ficheiros para este protocolo — endereço copiado</string>
+</resources>

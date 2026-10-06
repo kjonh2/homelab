@@ -4,8 +4,11 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import androidx.appcompat.app.AppCompatActivity
-import com.iknowu.app.databinding.ActivityMainBinding
+import androidx.fragment.app.Fragment
+import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.google.firebase.auth.FirebaseAuth
+import com.iknowu.app.databinding.ActivityMainBinding
+import com.iknowu.app.homestatus.HomeStatusFragment
 
 class MainActivity : AppCompatActivity() {
 
@@ -26,10 +29,32 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        // Display user info
+        // Display user info in the header
         val user = auth.currentUser
-        val welcomeText = "Bem-vindo, ${user?.displayName ?: user?.email ?: "Utilizador"}!"
-        binding.sampleText.text = welcomeText
+        binding.sampleText.text =
+            "Bem-vindo, ${user?.displayName ?: user?.email ?: "Utilizador"}!"
+
+        binding.bottomNav.setOnItemSelectedListener { item ->
+            when (item.itemId) {
+                R.id.nav_inicio -> switchTo(HomeStatusFragment())
+                R.id.nav_impressora -> switchTo(PrinterControlFragment())
+                R.id.nav_servicos -> switchTo(ServicesShortcutFragment())
+                R.id.nav_ficheiros -> switchTo(FilesCategoryFragment())
+                R.id.nav_perfil -> switchTo(ProfileFragment())
+                else -> false
+            }
+        }
+
+        if (savedInstanceState == null) {
+            binding.bottomNav.selectedItemId = R.id.nav_inicio
+        }
+    }
+
+    private fun switchTo(fragment: Fragment): Boolean {
+        supportFragmentManager.beginTransaction()
+            .replace(R.id.nav_container, fragment)
+            .commit()
+        return true
     }
 
     /**

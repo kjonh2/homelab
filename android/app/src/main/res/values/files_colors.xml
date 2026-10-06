@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Secção "Ficheiros por categoria" — cores autónomas dark/purple -->
+    <color name="files_texto_suave">#FFB3B3CC</color>
+    <color name="files_tile_fundo">#FF1E1B2E</color>
+    <color name="files_tile_stroke">#FF7C3AED</color>
+</resources>

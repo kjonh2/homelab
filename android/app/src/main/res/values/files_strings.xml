@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Bloco "Ficheiros por categoria" (PT-PT) — ficheiro autónomo para evitar conflitos -->
+    <string name="files_titulo">Ficheiros</string>
+    <string name="files_subtitulo">Organizados por categoria</string>
+    <string name="files_ficheiros">ficheiros</string>
+    <string name="files_voltar">← Voltar às categorias</string>
+    <string name="files_vazio">Sem ficheiros nesta categoria</string>
+
+    <string name="files_share_nao_config">Homelab: não configurado (tocar para definir URL)</string>
+    <string name="files_share_ok">Homelab: ligado</string>
+    <string name="files_share_url_titulo">Share do homelab</string>
+    <string name="files_share_url_msg">URL da listagem de ficheiros (JSON ou HTML):\nex.: http://192.168.1.50:8080/files</string>
+    <string name="files_share_ok_definir">Definir</string>
+    <string name="files_share_ok_remover">Remover</string>
+    <string name="files_share_cancelar">Cancelar</string>
+
+    <string name="files_pin_definir_titulo">Definir PIN (opcional)</string>
+    <string name="files_pin_definir_msg">Esta categoria pode ficar protegida por PIN. Prefere definir um ou entrar sem PIN?</string>
+    <string name="files_pin_definir_botao">Definir PIN</string>
+    <string name="files_pin_sem_botao">Sem PIN</string>
+    <string name="files_pin_pedir_titulo">Introduz o PIN</string>
+    <string name="files_pin_pedir_ok">Entrar</string>
+    <string name="files_pin_errado">PIN incorrecto</string>
+    <string name="files_pin_hint">PIN (4–8 dígitos)</string>
+    <string name="files_pin_invalido">O PIN deve ter 4–8 dígitos</string>
+
+    <string name="files_perm_necessaria">Sem permissão de leitura — as contagens locais podem estar vazias</string>
+</resources>

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Bloco "Atalhos de serviços" (PT-PT) — ficheiro autónomo para evitar conflitos -->
+    <string name="services_titulo">Atalhos de serviços</string>
+    <string name="services_subtitulo">Serviços e ferramentas</string>
+    <string name="services_sem_browser">Nenhum browser instalado</string>
+    <string name="services_url_indisponivel">URL do serviço ainda não configurado</string>
+</resources>

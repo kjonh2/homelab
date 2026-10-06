@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Câmaras do homelab — estética dark/purple, PT-PT -->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#14121F"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <TextView
+            android:id="@+id/textCamerasTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Câmaras do Homelab"
+            android:textColor="#C9A6FF"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/textCamerasSubtitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Stream MJPEG das câmaras USB (mjpeg-streamer / Motion / ffmpeg)"
+            android:textColor="#8E8AA8"
+            android:textSize="13sp" />
+
+        <EditText
+            android:id="@+id/inputCameraUrl1"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:hint="URL Câmara 1 (ex.: http://[IP]:8081/?action=stream)"
+            android:inputType="textUri"
+            android:textColor="#E6E1F5"
+            android:textColorHint="#5E5878"
+            android:textSize="14sp" />
+
+        <EditText
+            android:id="@+id/inputCameraUrl2"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:hint="URL Câmara 2 (ex.: http://[IP]:8082/?action=stream)"
+            android:inputType="textUri"
+            android:textColor="#E6E1F5"
+            android:textColorHint="#5E5878"
+            android:textSize="14sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btnCamerasStart"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginEnd="6dp"
+                android:backgroundTint="#9C6BFF"
+                android:text="Ligar"
+                android:textColor="#FFFFFF" />
+
+            <Button
+                android:id="@+id/btnCamerasStop"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:backgroundTint="#5E4B8B"
+                android:text="Desligar"
+                android:textColor="#FFFFFF" />
+        </LinearLayout>
+
+        <com.iknowu.app.CameraStreamView
+            android:id="@+id/cameraView1"
+            android:layout_width="match_parent"
+            android:layout_height="220dp"
+            android:layout_marginTop="14dp" />
+
+        <com.iknowu.app.CameraStreamView
+            android:id="@+id/cameraView2"
+            android:layout_width="match_parent"
+            android:layout_height="220dp"
+            android:layout_marginTop="12dp" />
+    </LinearLayout>
+</ScrollView>

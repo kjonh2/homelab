@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Cores do bloco "Atalhos de serviços" (dark/purple) -->
+    <color name="services_texto_suave">#FFB0A6C8</color>
+    <color name="services_card_bg">#FF1E1B2E</color>
+    <color name="services_card_stroke">#FF3700B3</color>
+</resources>
