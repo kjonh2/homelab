@@ -12,8 +12,10 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Base64
 import android.widget.Button
+import android.widget.ArrayAdapter
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.Spinner
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -60,6 +62,16 @@ class DrisaVoiceActivity : AppCompatActivity() {
     private lateinit var transcript: TextView
     private lateinit var connectButton: Button
     private lateinit var talkButton: Button
+    private lateinit var modelHostPicker: Spinner
+    private lateinit var modelCategoryPicker: Spinner
+    private lateinit var modelPicker: Spinner
+    private lateinit var modelStatus: TextView
+    private lateinit var refreshModelsButton: Button
+    private lateinit var loadModelButton: Button
+    private var modelChoices: List<ModelChoice> = emptyList()
+    private var pendingCatalogRequest = ""
+
+    private data class ModelChoice(val id: String, val loaded: Boolean)
 
     private val requestMic = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) startRecording() else setStatus("É necessário permitir o microfone para falar com a Drisa.")
@@ -73,6 +85,10 @@ class DrisaVoiceActivity : AppCompatActivity() {
         deviceId.setText(prefs.getString("device", "redmi-note-11"))
         token.setText(runCatching { SecureDrisaSettings.load(this) }.getOrNull().orEmpty())
         connectButton.setOnClickListener { if (socket == null) connect() else disconnect() }
+        refreshModelsButton.setOnClickListener { requestModelCatalog() }
+        loadModelButton.setOnClickListener { loadSelectedModel() }
+        modelHostPicker.onItemSelectedListener = modelSelectionListener
+        modelCategoryPicker.onItemSelectedListener = modelSelectionListener
         talkButton.setOnClickListener {
             if (recording.get()) stopRecording()
             else if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) startRecording()
@@ -119,6 +135,26 @@ class DrisaVoiceActivity : AppCompatActivity() {
         root.addView(connectButton, matchWrap())
         root.addView(status, matchWrap())
         root.addView(talkButton, matchWrap())
+        root.addView(label("Modelos da Drisa"))
+        root.addView(label("Onde carregar"))
+        modelHostPicker = Spinner(this).apply {
+            adapter = spinnerAdapter(listOf("Portátil", "VPS"))
+        }
+        root.addView(modelHostPicker, matchWrap())
+        root.addView(label("Categoria"))
+        modelCategoryPicker = Spinner(this).apply {
+            adapter = spinnerAdapter(listOf("Texto (LLM)", "Transcrição (STT)", "Voz (Kokoro TTS)"))
+        }
+        root.addView(modelCategoryPicker, matchWrap())
+        root.addView(label("Modelo"))
+        modelPicker = Spinner(this)
+        root.addView(modelPicker, matchWrap())
+        modelStatus = label("Liga à Drisa para consultar os modelos.")
+        root.addView(modelStatus, matchWrap())
+        refreshModelsButton = Button(this).apply { text = "Atualizar modelos" }
+        loadModelButton = Button(this).apply { text = "Carregar neste host"; isEnabled = false }
+        root.addView(refreshModelsButton, matchWrap())
+        root.addView(loadModelButton, matchWrap())
         val scroll = ScrollView(this).apply { addView(transcript) }
         root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
         setContentView(root)
@@ -167,8 +203,11 @@ class DrisaVoiceActivity : AppCompatActivity() {
                             runOnUiThread {
                                 setStatus(if (authenticated) "Ligada e autenticada. Toca no botão para gravar uma mensagem." else "A gateway não autorizou este dispositivo. Confirma a allowlist.")
                                 updateButtons()
+                                if (authenticated) requestModelCatalog()
                             }
                         }
+                        "models_catalog" -> runOnUiThread { showModelCatalog(message) }
+                        "model_operation" -> runOnUiThread { showModelOperation(message) }
                         "transcript" -> runOnUiThread { appendMessage("Tu", message.optString("text")) }
                         "reply" -> runOnUiThread { appendMessage("Drisa", message.optString("text")) }
                         "tts" -> playReply(message.optString("audio_b64"))
@@ -278,12 +317,105 @@ class DrisaVoiceActivity : AppCompatActivity() {
         transcript.append("$speaker: $text\n\n")
     }
 
+    private val modelSelectionListener = object : android.widget.AdapterView.OnItemSelectedListener {
+        override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+        override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
+            requestModelCatalog()
+        }
+    }
+
+    private fun spinnerAdapter(items: List<String>) = ArrayAdapter(
+        this,
+        android.R.layout.simple_spinner_item,
+        items
+    ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+
+    private fun currentModelHost() = if (modelHostPicker.selectedItemPosition == 1) "vps" else "pc"
+    private fun currentModelCategory() = when (modelCategoryPicker.selectedItemPosition) {
+        1 -> "stt"
+        2 -> "tts"
+        else -> "llm"
+    }
+
+    private fun requestModelCatalog() {
+        if (!::modelPicker.isInitialized || !authenticated) return
+        val requestId = System.currentTimeMillis().toString()
+        pendingCatalogRequest = requestId
+        val message = JSONObject()
+            .put("type", "models_list")
+            .put("request_id", requestId)
+            .put("host", currentModelHost())
+            .put("category", currentModelCategory())
+        if (socket?.send(message.toString()) != true) {
+            modelStatus.text = "Não foi possível pedir a lista de modelos."
+        } else {
+            modelStatus.text = "A consultar modelos carregados e disponíveis…"
+        }
+        loadModelButton.isEnabled = false
+    }
+
+    private fun showModelCatalog(message: JSONObject) {
+        if (message.optString("request_id") != pendingCatalogRequest) return
+        val array = message.optJSONArray("models") ?: org.json.JSONArray()
+        modelChoices = (0 until array.length()).mapNotNull { index ->
+            val item = array.optJSONObject(index) ?: return@mapNotNull null
+            item.optString("id").takeIf { it.isNotBlank() }?.let { ModelChoice(it, item.optBoolean("loaded")) }
+        }
+        val selected = message.optString("selected")
+        val labels = modelChoices.map { choice ->
+            choice.id + if (choice.loaded) "  ·  carregado" else ""
+        }
+        modelPicker.adapter = spinnerAdapter(labels.ifEmpty { listOf("Sem modelos disponíveis") })
+        val selectedIndex = modelChoices.indexOfFirst { it.id == selected }
+        if (selectedIndex >= 0) modelPicker.setSelection(selectedIndex)
+        val loaded = modelChoices.filter { it.loaded }.joinToString { it.id }.ifBlank { "nenhum" }
+        val note = message.optString("message")
+        modelStatus.text = buildString {
+            append("Carregados neste host: ").append(loaded)
+            if (selected.isNotBlank()) append("\nAtivo para a Drisa: ").append(selected)
+            if (note.isNotBlank()) append("\n").append(note)
+        }
+        loadModelButton.isEnabled = authenticated && modelChoices.isNotEmpty()
+    }
+
+    private fun loadSelectedModel() {
+        if (!authenticated || modelChoices.isEmpty()) return
+        val index = modelPicker.selectedItemPosition.coerceIn(0, modelChoices.lastIndex)
+        val choice = modelChoices[index]
+        val requestId = System.currentTimeMillis().toString()
+        pendingCatalogRequest = requestId
+        val message = JSONObject()
+            .put("type", "models_load")
+            .put("request_id", requestId)
+            .put("host", currentModelHost())
+            .put("category", currentModelCategory())
+            .put("model", choice.id)
+        loadModelButton.isEnabled = false
+        modelStatus.text = "A carregar ${choice.id}…"
+        if (socket?.send(message.toString()) != true) {
+            loadModelButton.isEnabled = true
+            modelStatus.text = "Não foi possível iniciar o carregamento."
+        }
+    }
+
+    private fun showModelOperation(message: JSONObject) {
+        if (message.optString("request_id") != pendingCatalogRequest) return
+        modelStatus.text = message.optString("message", "Operação de modelos concluída.")
+        if (message.isNull("ok") || message.optBoolean("ok")) {
+            if (message.optBoolean("ok")) requestModelCatalog()
+        } else {
+            loadModelButton.isEnabled = authenticated && modelChoices.isNotEmpty()
+        }
+    }
+
     private fun setStatus(message: String) { status.text = message }
 
     private fun updateButtons() {
         connectButton.text = if (socket == null) "Ligar à Drisa" else "Desligar"
         talkButton.isEnabled = authenticated || recording.get()
         talkButton.text = if (recording.get()) "Parar e enviar voz" else "Gravar mensagem de voz"
+        refreshModelsButton.isEnabled = authenticated
+        if (!authenticated) loadModelButton.isEnabled = false
     }
 
     private fun makeWav(pcmData: ByteArray, sampleRate: Int, channels: Int, bits: Int): ByteArray {
