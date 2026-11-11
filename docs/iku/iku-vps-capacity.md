@@ -16,9 +16,11 @@ Medição feita em 2026-11-11 no nó `vps-4e5174e4`, enquanto portal, n8n, Nextc
 
 Esta VPS suporta os serviços de portal, automação e cloud observados junto com **um servidor de modelo LFM3**. O modelo Omni é o servidor atualmente implantado. Os números medidos não provam que os modelos Omni e texto possam servir pedidos simultaneamente; com 8 GiB e sem swap, manter apenas um modelo ativo é a configuração conservadora.
 
+Em 2026-11-12, a API autenticada `/models` mostrou `lfm3-uncensored` carregado; `/health` e `/models` responderam HTTP 200. A configuração da Drisa aponta para esta API da VPS. Este estado substitui a nota anterior sobre o modelo Omni em execução; Omni e texto continuam a ser opções selecionáveis, com apenas um modelo residente de cada vez.
+
 O cluster é um único nó: Kubernetes organiza e reinicia os serviços, mas ainda não fornece alta disponibilidade nem failover entre máquinas. As PVCs usam armazenamento local e não substituem backups. Os outros computadores ainda precisam de autenticação e preparação como workers antes de poderem assumir workloads.
 
-O acesso público continua limitado a SSH (`22/tcp` com rate limit). O K3s API (`6443`) e os serviços web permanecem privados/ClusterIP; Tailscale Serve ainda precisa da aprovação de HTTPS no tailnet antes de os publicar apenas na rede privada.
+Em 2026-11-12, a partir do portátil ligado ao tailnet, o portal redirecionou `/` para `/login` (307) e `/login` respondeu 200; n8n `/healthz`, Nextcloud `/status.php` e LFM3 `/health` responderam 200 nas portas privadas `8443`, `8444` e `8445`. Isto confirma as rotas HTTPS tailnet-only em funcionamento. Os Services Kubernetes continuam ClusterIP; estes resultados não substituem a auditoria das regras públicas do firewall.
 
 ## Segurança observada
 
