@@ -62,7 +62,7 @@ Nextcloud and n8n are configured for the VPS's Tailscale MagicDNS name and their
 
 The Android Services screen includes a push-to-talk entry for the Windows laptop's Drisa gateway. The app uses `wss://iknowu.tail2931da.ts.net/`, device ID `redmi-note-11`, and stores the gateway token encrypted with Android Keystore. The laptop's Tailscale Serve HTTPS approval is still pending; after approval, serve `http://127.0.0.1:8765` on the laptop. The token is stored at `C:\Users\kjonh\workspace\drisa\gateway_token.txt` on the laptop and must be entered once in the app.
 
-Build the current Android debug artifact from `android/` with `gradlew.bat :app:assembleModernDebug`. It is unsigned for Play Store release and must be installed manually. The Redmi was not attached over ADB during this setup.
+Install the APK built from `android/` with `gradlew.bat :app:assembleModernDebug`; it is a debug build, not signed for Play Store release. Sign in with the existing Iku account before opening Services; `MainActivity` redirects unauthenticated sessions to Firebase `LoginActivity`. In Services, open **Falar com a Drisa**, keep the endpoint and device ID defaults, enter the gateway token from the laptop once, and connect. The Android app encrypts and stores that token with Android Keystore. The Redmi Note 11 accepted the current APK over ADB on 2026-11-11; the voice flow still awaits an authenticated app session and the laptop Serve route.
 
 ## Laptop Gaming mode
 
