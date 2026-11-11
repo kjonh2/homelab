@@ -12,7 +12,35 @@ See [the current VPS capacity snapshot](../../docs/iku/iku-vps-capacity.md) for 
 
 The private portal at the VPS tailnet root checks Nextcloud, n8n, and LFM3 from inside the cluster and shows their current health on the home and Services pages. The app checks only unauthenticated health endpoints and does not read user files, workflows, or model prompts. Links require a device connected to the tailnet. The laptop Drisa gateway is marked as local because the VPS cannot verify its state.
 
-The health probe URLs can be overridden with `NEXTCLOUD_HEALTH_URL`, `N8N_HEALTH_URL`, and `LFM3_HEALTH_URL` on the portal Deployment. Probes time out after 2.5 seconds. The profile, device, session, and administration pages remain placeholders until an identity service is implemented; the login form is disabled.
+The health probe URLs can be overridden with `NEXTCLOUD_HEALTH_URL`, `N8N_HEALTH_URL`, and `LFM3_HEALTH_URL` on the portal Deployment. Probes time out after 2.5 seconds. The local identity API and portal login/bootstrap UI are deployed to the VPS (`iku-auth:0.1.0`, `iku-portal:0.1.2`). The portal fails closed with `IKU_AUTH_ENFORCE=true`. Complete the first administrator bootstrap using the local token file described below. Profile, device, session-management, and broader admin actions remain incomplete. Service pages only check unauthenticated health endpoints.
+
+### Local Iku Auth
+
+The service is a single-replica FastAPI/SQLite service with Argon2id password hashing, encrypted TOTP seeds, one-time bootstrap, revocable web sessions, rotating Android refresh tokens, login throttling, and audit events. Its ClusterIP is `iku-auth.iku.svc.cluster.local:8080`; the API has no public route or interactive documentation. SQLite lives on a VPS-local PVC and is not HA. Readiness and the unauthenticated session response were checked after deployment.
+
+Build and test from the repository root:
+
+```powershell
+python -m unittest discover -s services/iku-auth/tests -v
+docker build -t iku-auth:0.1.0 -f services/iku-auth/Dockerfile services/iku-auth
+```
+
+Create a random 32-byte bootstrap token locally and keep it in a user-only file; transfer it to the VPS without printing it. On the VPS, create the encryption key and Kubernetes Secret:
+
+```bash
+sudo install -d -m 700 /etc/rancher/k3s/secrets/iku-auth
+sudo sh -c 'umask 077; test -s /etc/rancher/k3s/secrets/iku-auth/totp-key || python3 -c "import base64,os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())" > /etc/rancher/k3s/secrets/iku-auth/totp-key'
+sudo k3s kubectl -n iku create secret generic iku-auth-secrets \
+  --from-file=bootstrap-token=/etc/rancher/k3s/secrets/iku-auth/bootstrap-token \
+  --from-file=totp-key=/etc/rancher/k3s/secrets/iku-auth/totp-key \
+  --dry-run=client -o yaml | sudo k3s kubectl apply -f -
+sudo k3s kubectl apply -f /opt/homelab/deploy/k3s/auth.yaml
+sudo k3s kubectl -n iku rollout status deployment/iku-auth --timeout=120s
+```
+
+Open [the private Iku portal](https://vps-4e5174e4.tail2931da.ts.net/) while connected to Tailscale. Choose **Configurar o primeiro administrador**, enter the bootstrap token from `C:\Users\kjonh\workspace\drisa\iku_auth_bootstrap_token.txt`, and set your email and password yourself. Add the returned TOTP secret to an authenticator, save the recovery codes, and confirm a fresh TOTP. Do not send the token, password, TOTP seed, or recovery codes in chat. After bootstrap, remove the `bootstrap-token` key from the Kubernetes Secret and its local VPS file; the database also permanently disables bootstrap after successful TOTP setup.
+
+The portal session guard checks the API on every portal request and fails closed if auth cannot be reached. Android local authentication, Google-token migration, API-token administration, and SSO proxying remain follow-up work. Nextcloud, n8n, and model APIs continue using their own authentication until moved behind the auth gateway and tested.
 
 ## LFM3
 

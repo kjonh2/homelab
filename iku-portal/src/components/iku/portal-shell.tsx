@@ -23,14 +23,16 @@ const icons = {
   admin: LockKeyhole,
 } as const;
 
-function NavItems({ close }: { close?: () => void }) {
+type PortalUser = { email: string; roles: string[] };
+
+function NavItems({ close, isAdmin }: { close?: () => void; isAdmin: boolean }) {
   const pathname = usePathname();
   return (
     <>
       <Link className={`nav-link ${pathname === "/" ? "active" : ""}`} href="/" onClick={close}>
         <House size={18} strokeWidth={1.8} /><span>Início</span>
       </Link>
-      {portalSections.map((section) => {
+      {portalSections.filter((section) => section.slug !== "admin" || isAdmin).map((section) => {
         const Icon = icons[section.icon as keyof typeof icons];
         const active = pathname === `/${section.slug}`;
         return (
@@ -44,10 +46,12 @@ function NavItems({ close }: { close?: () => void }) {
   );
 }
 
-export function PortalShell({ children }: Readonly<{ children: React.ReactNode }>) {
+export function PortalShell({ children, user }: Readonly<{ children: React.ReactNode; user: PortalUser | null }>) {
   const [menuOpen, setMenuOpen] = useState(false);
   const pathname = usePathname();
   const current = portalSections.find((section) => pathname === `/${section.slug}`);
+  const isAdmin = Boolean(user?.roles.includes("admin"));
+  const avatar = user?.email?.slice(0, 1).toLocaleUpperCase() ?? "I";
 
   return (
     <div className="portal-frame">
@@ -57,17 +61,17 @@ export function PortalShell({ children }: Readonly<{ children: React.ReactNode }
           <span className="brand-copy"><strong>iku</strong><small>O TEU ESPAÇO</small></span>
         </Link>
         <div className="sidebar-label">ESPAÇO PESSOAL</div>
-        <nav className="main-nav" aria-label="Navegação principal"><NavItems /></nav>
+        <nav className="main-nav" aria-label="Navegação principal"><NavItems isAdmin={isAdmin} /></nav>
         <div className="sidebar-bottom">
           <div className="privacy-note"><ShieldCheck size={16} /><span>Privado por desenho</span></div>
-          <div className="sidebar-profile"><span className="avatar">F</span><span><strong>Francisco</strong><small>Pré-visualização local</small></span></div>
+          <div className="sidebar-profile"><span className="avatar">{avatar}</span><span><strong>{user?.email ?? "Pré-visualização"}</strong><small>{isAdmin ? "Administrador Iku" : "Conta Iku"}</small></span></div>
         </div>
       </aside>
 
       {menuOpen && <button className="mobile-scrim" aria-label="Fechar menu" onClick={() => setMenuOpen(false)} />}
       <aside className={`mobile-drawer ${menuOpen ? "open" : ""}`} aria-hidden={!menuOpen}>
         <div className="drawer-head"><span className="brand-mark"><Sparkles size={19} /></span><strong>iku</strong><button className="icon-button" aria-label="Fechar menu" onClick={() => setMenuOpen(false)}><X size={19} /></button></div>
-        <nav className="main-nav" aria-label="Navegação móvel"><NavItems close={() => setMenuOpen(false)} /></nav>
+        <nav className="main-nav" aria-label="Navegação móvel"><NavItems close={() => setMenuOpen(false)} isAdmin={isAdmin} /></nav>
       </aside>
 
       <main className="main-area">
@@ -77,19 +81,19 @@ export function PortalShell({ children }: Readonly<{ children: React.ReactNode }
             <div className="breadcrumb"><span>Iku</span><ChevronRight size={15} /><strong>{current?.label ?? "Início"}</strong></div>
           </div>
           <div className="topbar-actions">
-            <span className="preview-pill"><span className="status-dot" /> Área parcial</span>
+            <span className="preview-pill"><span className="status-dot" /> {user ? "Sessão ativa" : "Pré-visualização"}</span>
             <button className="icon-button help-button" aria-label="Ajuda"><CircleHelp size={19} /></button>
             <button className="icon-button" aria-label="Notificações"><Bell size={19} /><span className="notification-dot" /></button>
-            <span className="avatar avatar-small">F</span>
+            <span className="avatar avatar-small">{avatar}</span>
           </div>
         </header>
         <div className="page-content">{children}</div>
-        <footer className="site-footer"><span>iku · o teu espaço digital</span><span><LockKeyhole size={13} /> A autenticação ainda não está ligada</span></footer>
+        <footer className="site-footer"><span>iku · o teu espaço digital</span><span><LockKeyhole size={13} /> {user ? "Sessão local Iku" : "Pré-visualização privada"}</span></footer>
       </main>
     </div>
   );
 }
 
 export function PreviewNotice() {
-  return <div className="preview-notice"><Cloud size={17} /><span>O estado dos serviços é consultado ao vivo. Perfil, sessões e gestão de dispositivos ainda precisam do serviço de identidade.</span></div>;
+  return <div className="preview-notice"><Cloud size={17} /><span>O estado dos serviços é consultado ao vivo. Algumas áreas de gestão ainda estão a ser ligadas.</span></div>;
 }

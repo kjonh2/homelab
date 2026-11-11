@@ -4,6 +4,8 @@ import { PreviewNotice } from "@/components/iku/portal-shell";
 import { ServiceCards } from "@/components/iku/service-cards";
 import { sectionBySlug } from "@/lib/portal-sections";
 import { getServiceStatus } from "@/lib/services";
+import { getAuthSession } from "@/lib/auth";
+import { redirect } from "next/navigation";
 
 export const dynamic = "force-dynamic";
 
@@ -11,6 +13,12 @@ export default async function SectionPage({ params }: { params: Promise<{ sectio
   const { section: slug } = await params;
   const section = sectionBySlug[slug];
   if (!section) notFound();
+
+  if (slug === "admin" && process.env.IKU_AUTH_ENFORCE === "true") {
+    const session = await getAuthSession();
+    if (!session) redirect("/login");
+    if (!session.user.roles.includes("admin")) notFound();
+  }
 
   if (slug === "services") {
     const services = await getServiceStatus();

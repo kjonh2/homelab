@@ -2,7 +2,7 @@
 
 ## Estado atual
 
-O serviço de identidade ainda não está implementado. O portal e os serviços da VPS são acessíveis apenas através do tailnet, mas as páginas de conta do portal são placeholders e os serviços mantêm autenticação própria. Não apresentar o tailnet como sessão Iku nem como SSO.
+O serviço `iku-auth` e a página de entrada/bootstrap do portal estão implementados e instalados no VPS. O serviço está pronto, mas o primeiro administrador ainda tem de concluir o bootstrap no portal. O portal exige sessão e falha fechado; os outros serviços ainda mantêm autenticação própria. Não apresentar o tailnet como sessão Iku nem como SSO.
 
 ## Objetivos
 
@@ -23,7 +23,7 @@ Traefik/auth gateway ── valida sessão/claims ── Nextcloud, n8n e outros
 - `iku-auth`: API privada no namespace `iku`; uma réplica, sem NodePort ou Ingress público.
 - `auth-db`: SQLite separado dos dados Nextcloud, guardado num PVC e copiado em backups cifrados.
 - `iku-portal`: formulário e páginas de conta; comunica com a API de auth apenas no servidor Next.js.
-- Android: envia credenciais ao serviço Iku Auth e guarda refresh/API material no Android Keystore.
+- Android: integração com sessões Iku e Android Keystore ainda pendente; a app mantém o login Firebase atual.
 - Gateway: valida sessão ou token e aplica roles/scopes antes de encaminhar pedidos.
 
 O cluster VPS atual é de nó único com armazenamento local. Por isso a base de dados começa com uma réplica e não oferece failover. O worker homelab pode alojar workloads sem estado; não mover a base de dados entre nós sem primeiro definir armazenamento replicado e backups com recuperação testada.
@@ -55,14 +55,12 @@ Guardar timestamps UTC e IDs aleatórios. Aplicar chaves estrangeiras e índices
 
 | Método e rota | Uso |
 | --- | --- |
-| `POST /v1/auth/login` | Valida email/password; devolve desafio MFA quando necessário. |
-| `POST /v1/auth/mfa/totp` | Verifica TOTP ou código de recuperação e conclui login. |
-| `POST /v1/auth/google/exchange` | Verifica Google ID token e emite sessão Iku durante a migração Android. |
+| `POST /v1/auth/bootstrap` | Cria a primeira conta admin e inicia configuração TOTP usando o token de uso único. |
+| `POST /v1/auth/bootstrap/verify-mfa` | Confirma TOTP e conclui o bootstrap do administrador. |
+| `POST /v1/auth/login` | Valida email/password e TOTP/código de recuperação; cria sessão web ou tokens Android. |
 | `GET /v1/auth/session` | Devolve identidade e permissões da sessão atual, sem segredos. |
 | `POST /v1/auth/refresh` | Roda refresh token do Android e revoga a utilização anterior. |
 | `POST /v1/auth/logout` | Revoga a sessão e limpa cookie/token. |
-| `/v1/tokens` | Criar, listar metadados e revogar tokens por dispositivo. |
-| `/v1/admin/*` | Gestão de utilizadores, roles, MFA e sessões; requer role `admin` e MFA recente. |
 
 Respostas de autenticação usam mensagens genéricas para não revelar se um email existe. Requerer HTTPS e `Content-Type: application/json`; limitar corpos e tempos de resposta.
 
@@ -72,12 +70,12 @@ Os endpoints atuais de Tailscale Serve expõem diretamente o portal, n8n, Nextcl
 
 Rollout incremental:
 
-1. Implementar API, schema versionado, bootstrap de uso único, TOTP, sessões, rate limit e testes de segurança.
-2. Instalar `iku-auth` com PVC e Secrets no VPS; confirmar backup e recuperação da base de dados.
-3. Ligar o portal e validar login, MFA, logout e expiração na rota Tailscale.
+1. Implementar API, schema, bootstrap de uso único, TOTP, sessões, rate limit e testes de segurança. **Concluído.**
+2. Instalar `iku-auth` com PVC e Secrets no VPS. **Concluído; backup e recuperação ainda precisam de configuração.**
+3. Ligar o portal e verificar a página de entrada e a exigência de sessão. **Concluído; falta o primeiro bootstrap pelo utilizador.**
 4. Integrar Android com sessão Iku e Keystore; validar migração Google sem tratar Firebase claims como autorização.
 5. Colocar gateway à frente de cada app e só então ativar SSO, RBAC e administração.
 
 ## Trade-offs e limites
 
-SQLite reduz consumo e manutenção para o uso single-user atual, mas exige uma réplica e backups consistentes. Um IdP completo como Keycloak ofereceria fluxos OAuth/OIDC prontos, com maior consumo e operação. Reavaliar PostgreSQL/HA quando houver mais utilizadores, concorrência ou necessidade de sobreviver à falha da VPS. Até o gateway e o bootstrap estarem implementados, login, MFA, administração e SSO continuam por fazer.
+SQLite reduz consumo e manutenção para o uso single-user atual, mas exige uma réplica e backups consistentes. Um IdP completo como Keycloak ofereceria fluxos OAuth/OIDC prontos, com maior consumo e operação. Reavaliar PostgreSQL/HA quando houver mais utilizadores, concorrência ou necessidade de sobreviver à falha da VPS. O login web, MFA TOTP do administrador e sessões estão implementados. O utilizador inicial ainda não foi criado; gestão de utilizadores/dispositivos, migração Android, gateway e SSO continuam por fazer.
