@@ -123,7 +123,27 @@ sudo systemctl restart iku-portal-forward iku-n8n-forward iku-nextcloud-forward 
 
 ## Persistent application data
 
-The default `local-path` StorageClass stores each PVC on the node that first binds it. This survives pod/container restarts but is not replicated and is not a backup. Back up PVCs and the K3s datastore off-host before storing personal files.
+The default `local-path` StorageClass stores each PVC on the node that first binds it. This survives pod/container restarts but is not replicated and is not a backup. The off-host backup job below must complete successfully before relying on recovery.
+
+### Encrypted VPS backups to the homelab
+
+`backup.yaml` runs a daily Restic backup from the VPS to a private, append-only Rest Server on the homelab. The repository is encrypted by Restic; the local recovery folder is `C:\Users\kjonh\workspace\drisa\iku-backup-credentials`. Keep a separately protected copy of `restic-password`; without it, the repository cannot be restored. The server password and bcrypt `htpasswd` are also stored there. The backup client sends data over the K3s overlay network and the receiver has no public or tailnet Service.
+
+Apply the manifest first to create the isolated namespace, then install/update the credentials and SQLite snapshot ConfigMap without writing secrets into Git:
+
+```powershell
+Get-Content deploy/k3s/backup.yaml -Raw | ssh ubuntu@vps-4e5174e4.tail2931da.ts.net 'sudo k3s kubectl apply -f -'
+kubectl create secret generic iku-backup-credentials --namespace iku-backup `
+  --from-file=htpasswd="$env:USERPROFILE\workspace\drisa\iku-backup-credentials\htpasswd" `
+  --from-file=rest-server-password="$env:USERPROFILE\workspace\drisa\iku-backup-credentials\rest-server-password" `
+  --from-file=restic-password="$env:USERPROFILE\workspace\drisa\iku-backup-credentials\restic-password" `
+  --dry-run=client -o yaml | ssh ubuntu@vps-4e5174e4.tail2931da.ts.net 'sudo k3s kubectl apply -f -'
+kubectl create configmap iku-backup-sqlite --namespace iku-backup `
+  --from-file=snapshot_sqlite.py=deploy/k3s/backup-sqlite.py `
+  --dry-run=client -o yaml | ssh ubuntu@vps-4e5174e4.tail2931da.ts.net 'sudo k3s kubectl apply -f -'
+```
+
+The initial snapshot can be started with `ssh ubuntu@vps-4e5174e4.tail2931da.ts.net 'sudo k3s kubectl -n iku-backup create job --from=cronjob/iku-backup iku-backup-manual'`. The job uses SQLite's online backup API for the Iku auth, n8n, Nextcloud and K3s state databases, validates each snapshot, then backs up those snapshots alongside the VPS K3s persistent volumes and configuration. Other application files are read live, so files changing during the run are not a point-in-time filesystem snapshot. Repository writes are limited to the `iku-backup-client` pod by NetworkPolicy; the client can reach only cluster DNS and the receiver, while the receiver has no egress and accepts only the client on port 8000. The backup namespace allows hostPath only because this job must read node-local K3s files. Its storage, K3s and config source mounts are read-only. The SQLite init container alone mounts the Nextcloud data PVC directory read-write so SQLite WAL mode can create its shared-memory lock; it opens the database in read-only mode, and the restic client excludes the live database and WAL files. The path points to the current Nextcloud PVC directory and must be updated if that PVC is recreated. The two root backup containers add only `DAC_READ_SEARCH` to read files owned by service UIDs or root. They disallow privilege escalation, use read-only root filesystems, and do not mount service-account tokens. The receiver runs non-root and drops all capabilities. Its `local-path` repository is tied to the homelab disk and does not survive loss of that machine. Append-only mode prevents the client from pruning; configure a separate authenticated maintenance procedure before the repository fills. Verify restores periodically rather than assuming a successful upload is enough.
 
 ## Homelab fallback worker
 

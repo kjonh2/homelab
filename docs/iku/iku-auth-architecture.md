@@ -72,11 +72,11 @@ Os endpoints atuais de Tailscale Serve expõem diretamente o portal, n8n, Nextcl
 Rollout incremental:
 
 1. Implementar API, schema, bootstrap de uso único, TOTP, sessões, rate limit e testes de segurança. **Concluído.**
-2. Instalar `iku-auth` com PVC e Secrets no VPS. **Concluído; backup e recuperação ainda precisam de configuração.**
+2. Instalar `iku-auth` com PVC e Secrets no VPS. **Concluído; backup Restic diário cifrado para o homelab instalado, integridade verificada e uma base SQLite restaurada com `PRAGMA integrity_check=ok`.**
 3. Ligar o portal, verificar a exigência de sessão e concluir o primeiro bootstrap. **Concluído; bootstrap e TOTP confirmados na base de dados da VPS.**
 4. Integrar Android com sessão Iku e Keystore; validar migração Google sem tratar Firebase claims como autorização. **Implementado e APK atual instalada; falta o utilizador confirmar a ligação da sessão no Perfil.**
 5. Colocar gateway à frente de cada app e só então ativar SSO, RBAC e administração.
 
 ## Trade-offs e limites
 
-SQLite reduz consumo e manutenção para o uso single-user atual, mas exige uma réplica e backups consistentes. Um IdP completo como Keycloak ofereceria fluxos OAuth/OIDC prontos, com maior consumo e operação. Reavaliar PostgreSQL/HA quando houver mais utilizadores, concorrência ou necessidade de sobreviver à falha da VPS. O login web, MFA TOTP do administrador, sessões Android e a ponte Firebase estão implementados. Gestão de utilizadores/dispositivos, gateway, backups com recuperação testada e SSO continuam por fazer.
+SQLite reduz consumo e manutenção para o uso single-user atual, mas exige uma réplica e backups consistentes. Um IdP completo como Keycloak ofereceria fluxos OAuth/OIDC prontos, com maior consumo e operação. Reavaliar PostgreSQL/HA quando houver mais utilizadores, concorrência ou necessidade de sobreviver à falha da VPS. O login web, MFA TOTP do administrador, sessões Android e a ponte Firebase estão implementados. Gestão de utilizadores/dispositivos, gateway e SSO continuam por fazer; a retenção/pruning do repositório append-only e exercícios periódicos de recuperação continuam como tarefas operacionais.
