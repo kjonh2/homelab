@@ -39,3 +39,7 @@ coverage/
 **/local.properties
 *.apk
 *.aab
+
+# Python build artifacts
+__pycache__/
+*.py[cod]
