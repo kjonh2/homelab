@@ -50,6 +50,24 @@
                 android:textSize="14sp" />
         </LinearLayout>
 
+        <TextView
+            android:id="@+id/ikuAuthStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp"
+            android:text="Sessão Iku ainda não ligada"
+            android:textColor="#A797D9"
+            android:textSize="14sp" />
+
+        <Button
+            android:id="@+id/btnIkuConnect"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="10dp"
+            android:backgroundTint="#5D43B5"
+            android:text="Ligar sessão Iku"
+            android:textColor="#FFFFFF" />
+
         <!-- Botão Terminar Sessão -->
         <Button
             android:id="@+id/btnLogout"

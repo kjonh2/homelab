@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
 import os
 import re
 import secrets
@@ -12,11 +13,15 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.request import urlopen
 from urllib.parse import quote
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 from cryptography.fernet import Fernet, InvalidToken
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field
@@ -27,12 +32,17 @@ SESSION_COOKIE = "iku_session"
 WEB_SESSION_TTL = 8 * 60 * 60
 ACCESS_TOKEN_TTL = 15 * 60
 REFRESH_TOKEN_TTL = 30 * 24 * 60 * 60
+FIREBASE_CERTS_URL = "https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com"
 LOGIN_WINDOW = 15 * 60
 LOGIN_FAILURE_LIMIT = 10
 EMAIL_RE = re.compile(r"^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,63}$")
 PASSWORD_HASHER = PasswordHasher()
 ARGON_LOCK = threading.BoundedSemaphore(1)
 DUMMY_PASSWORD_HASH = PASSWORD_HASHER.hash("iku-auth-dummy-" + secrets.token_urlsafe(32))
+FIREBASE_CERTS_LOCK = threading.Lock()
+FIREBASE_CERTS: dict[str, x509.Certificate] = {}
+FIREBASE_CERTS_EXPIRES_AT = 0
+FIREBASE_LAST_FORCED_REFRESH_AT = 0
 app = FastAPI(title="Iku Auth", docs_url=None, redoc_url=None, openapi_url=None)
 
 
@@ -82,6 +92,12 @@ class LoginInput(StrictModel):
 class RefreshInput(StrictModel):
     refresh_token: str = Field(min_length=32, max_length=512)
     device_name: str = Field(default="", max_length=100)
+
+
+class FirebaseExchangeInput(StrictModel):
+    id_token: str = Field(min_length=100, max_length=8192)
+    totp_code: str | None = Field(default=None, min_length=6, max_length=16)
+    device_name: str = Field(default="Iku Android", max_length=100)
 
 
 def utc_now() -> int:
@@ -156,6 +172,14 @@ def init_db() -> None:
                 revoked_at INTEGER
             );
             CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions(user_id, revoked_at, expires_at);
+            CREATE TABLE IF NOT EXISTS firebase_identities (
+                firebase_uid TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                email TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                last_used_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS firebase_identities_user_idx ON firebase_identities(user_id);
             CREATE TABLE IF NOT EXISTS refresh_tokens (
                 id TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -229,6 +253,94 @@ def read_secret(file_env: str) -> str:
     if len(value) < 32:
         raise HTTPException(status_code=503, detail="secret_not_available")
     return value
+
+
+def firebase_certificates(*, force_refresh: bool = False) -> dict[str, x509.Certificate]:
+    global FIREBASE_CERTS, FIREBASE_CERTS_EXPIRES_AT, FIREBASE_LAST_FORCED_REFRESH_AT
+    now = utc_now()
+    if not force_refresh and FIREBASE_CERTS and now < FIREBASE_CERTS_EXPIRES_AT:
+        return FIREBASE_CERTS
+    with FIREBASE_CERTS_LOCK:
+        now = utc_now()
+        if force_refresh and FIREBASE_CERTS and now - FIREBASE_LAST_FORCED_REFRESH_AT < 60:
+            return FIREBASE_CERTS
+        if not force_refresh and FIREBASE_CERTS and now < FIREBASE_CERTS_EXPIRES_AT:
+            return FIREBASE_CERTS
+        try:
+            with urlopen(FIREBASE_CERTS_URL, timeout=4) as response:
+                payload = json.loads(response.read(65536))
+                cache_control = response.headers.get("Cache-Control", "")
+            certs = {kid: x509.load_pem_x509_certificate(pem.encode("ascii")) for kid, pem in payload.items()}
+            if not certs:
+                raise ValueError("empty certificate response")
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="identity_provider_unavailable") from exc
+        max_age = re.search(r"(?:^|,)\s*max-age=(\d+)", cache_control, re.IGNORECASE)
+        ttl = max(60, min(int(max_age.group(1)) if max_age else 300, 24 * 60 * 60))
+        FIREBASE_CERTS = certs
+        FIREBASE_CERTS_EXPIRES_AT = now + ttl
+        if force_refresh:
+            FIREBASE_LAST_FORCED_REFRESH_AT = now
+        return certs
+
+
+def _decode_jwt_part(value: str) -> dict[str, Any]:
+    decoded = base64.urlsafe_b64decode(value + "=" * ((4 - len(value) % 4) % 4))
+    result = json.loads(decoded)
+    if not isinstance(result, dict):
+        raise ValueError("JWT part must be an object")
+    return result
+
+
+def verify_firebase_id_token(token: str) -> dict[str, Any]:
+    project_id = os.getenv("IKU_FIREBASE_PROJECT_ID", "").strip()
+    if not project_id:
+        raise HTTPException(status_code=503, detail="identity_provider_not_configured")
+    try:
+        if len(token) > 8192:
+            raise ValueError("token too large")
+        header_part, payload_part, signature_part = token.split(".")
+        header = _decode_jwt_part(header_part)
+        claims = _decode_jwt_part(payload_part)
+        kid = header.get("kid")
+        if header.get("alg") != "RS256" or not isinstance(kid, str) or not kid or header.get("typ", "JWT") != "JWT":
+            raise ValueError("unsupported JWT header")
+        certificate = firebase_certificates().get(kid)
+        if certificate is None:
+            certificate = firebase_certificates(force_refresh=True).get(kid)
+        if certificate is None:
+            raise ValueError("unknown signing key")
+        public_key = certificate.public_key()
+        if not isinstance(public_key, rsa.RSAPublicKey):
+            raise ValueError("unsupported signing key")
+        signature = base64.urlsafe_b64decode(signature_part + "=" * ((4 - len(signature_part) % 4) % 4))
+        public_key.verify(signature, f"{header_part}.{payload_part}".encode("ascii"), padding.PKCS1v15(), hashes.SHA256())
+
+        now = utc_now()
+        issued_at = claims.get("iat")
+        expires_at = claims.get("exp")
+        auth_time = claims.get("auth_time")
+        uid = claims.get("sub")
+        email = claims.get("email")
+        firebase_claims = claims.get("firebase")
+        if claims.get("aud") != project_id or claims.get("iss") != f"https://securetoken.google.com/{project_id}":
+            raise ValueError("wrong issuer or audience")
+        if not all(isinstance(value, int) and not isinstance(value, bool) for value in (issued_at, expires_at, auth_time)):
+            raise ValueError("invalid timestamps")
+        if expires_at <= now or issued_at > now + 300 or auth_time > now + 300 or expires_at - issued_at > 3660:
+            raise ValueError("expired or invalid timestamps")
+        if not isinstance(uid, str) or not uid or len(uid) > 128:
+            raise ValueError("invalid subject")
+        if not isinstance(email, str) or claims.get("email_verified") is not True:
+            raise ValueError("unverified email")
+        if not isinstance(firebase_claims, dict) or firebase_claims.get("sign_in_provider") not in {"google.com", "password"}:
+            raise ValueError("unsupported provider")
+        claims["email"] = normalize_email(email)
+        return claims
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="invalid_identity_token") from exc
 
 
 def get_fernet() -> Fernet:
@@ -596,6 +708,72 @@ def login(body: LoginInput, request: Request, response: Response) -> dict[str, A
         if cookie_token:
             set_session_cookie(response, cookie_token, WEB_SESSION_TTL)
         return issued
+    finally:
+        db.close()
+
+
+@app.post("/v1/auth/firebase/exchange")
+def firebase_exchange(body: FirebaseExchangeInput, request: Request) -> dict[str, Any]:
+    claims = verify_firebase_id_token(body.id_token)
+    email = claims["email"]
+    firebase_uid = claims["sub"]
+    ip = request_ip(request)
+    db = connect()
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        if login_is_limited(db, email, ip):
+            raise HTTPException(status_code=429, detail="too_many_attempts")
+
+        identity = db.execute(
+            "SELECT u.* FROM firebase_identities i JOIN users u ON u.id=i.user_id WHERE i.firebase_uid=?",
+            (firebase_uid,),
+        ).fetchone()
+        user = identity or db.execute("SELECT * FROM users WHERE email=? COLLATE NOCASE", (email,)).fetchone()
+        if not user or user["disabled"]:
+            record_attempt(db, email, ip, False)
+            audit(db, user["id"] if user else None, "auth.firebase.exchange", "denied", "android", ip)
+            db.commit()
+            raise HTTPException(status_code=401, detail="invalid_credentials")
+
+        mapped = db.execute("SELECT user_id FROM firebase_identities WHERE firebase_uid=?", (firebase_uid,)).fetchone()
+        if mapped and mapped["user_id"] != user["id"]:
+            record_attempt(db, email, ip, False)
+            audit(db, user["id"], "auth.firebase.exchange", "denied", "android", ip)
+            db.commit()
+            raise HTTPException(status_code=401, detail="invalid_credentials")
+        if not mapped:
+            db.execute(
+                "INSERT INTO firebase_identities(firebase_uid,user_id,email,created_at,last_used_at) VALUES(?,?,?,?,?)",
+                (firebase_uid, user["id"], email, utc_now(), utc_now()),
+            )
+        else:
+            db.execute("UPDATE firebase_identities SET last_used_at=? WHERE firebase_uid=?", (utc_now(), firebase_uid))
+
+        roles = [row["role"] for row in db.execute("SELECT role FROM user_roles WHERE user_id=?", (user["id"],)).fetchall()]
+        factor = db.execute("SELECT enabled FROM mfa_factors WHERE user_id=?", (user["id"],)).fetchone()
+        if "admin" in roles and (not factor or not factor["enabled"]):
+            db.rollback()
+            raise HTTPException(status_code=403, detail="mfa_setup_required")
+        if factor and factor["enabled"]:
+            if not body.totp_code:
+                audit(db, user["id"], "auth.firebase.exchange.mfa", "challenge", "android", ip)
+                db.commit()
+                raise HTTPException(status_code=428, detail="mfa_required")
+            if not check_totp_or_recovery(db, user["id"], body.totp_code):
+                record_attempt(db, email, ip, False)
+                audit(db, user["id"], "auth.firebase.exchange.mfa", "denied", "android", ip)
+                db.commit()
+                raise HTTPException(status_code=401, detail="invalid_credentials")
+
+        record_attempt(db, email, ip, True)
+        issued = issue_session(db, user, "android", body.device_name.strip() or "Iku Android", ip)
+        audit(db, user["id"], "auth.firebase.exchange", "success", "android", ip)
+        db.commit()
+        return issued
+    except Exception:
+        if db.in_transaction:
+            db.rollback()
+        raise
     finally:
         db.close()
 

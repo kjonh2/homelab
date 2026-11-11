@@ -42,12 +42,12 @@ O cluster VPS atual é de nó único com armazenamento local. Por isso a base de
 - Verificar `Origin` nas mutações web e usar token CSRF. Nunca aceitar credenciais ou tokens em query strings.
 - Android recebe access token de curta duração e refresh token rotativo. Guardar hash do refresh token, família, dispositivo, expiração e revogação; guardar o segredo apenas no Keystore no cliente.
 - Tokens de API têm prefixo identificável, hash no banco, nome de dispositivo, scopes, criação, última utilização, expiração e revogação. Mostrar o valor apenas uma vez.
-- Hash de palavra-passe com Argon2id e parâmetros atualizáveis; comparação de tempo constante para tokens. Limitar tentativas por IP e identificador, sem registar palavras-passe, códigos MFA ou tokens.
+- Hash de palavra-passe com Argon2id e parâmetros atualizáveis; comparação de tempo constante para tokens. Limitar tentativas por IP e identificador, sem registar palavras-passe, códigos MFA ou tokens. A ponte Firebase valida assinatura RS256, issuer, audience, timestamps, provider e email verificado, usando certificados Google em cache; não consulta a revogação do refresh token Firebase.
 - Chaves de assinatura, credenciais bootstrap e chaves de cifragem chegam por Kubernetes Secret montado como ficheiro. Não usar ConfigMap, imagem, manifestos versionados ou logs para material secreto.
 
 ## Modelo de dados
 
-`users`, `roles`, `user_roles`, `mfa_factors`, `recovery_codes`, `sessions`, `refresh_tokens`, `api_tokens`, `audit_events`, `login_attempts`.
+`users`, `roles`, `user_roles`, `mfa_factors`, `recovery_codes`, `sessions`, `refresh_tokens`, `firebase_identities`, `api_tokens`, `audit_events`, `login_attempts`.
 
 Guardar timestamps UTC e IDs aleatórios. Aplicar chaves estrangeiras e índices para utilizador, sessão, dispositivo, expiração e hash do token. Eventos de auditoria registam resultado, ação, utilizador quando conhecido, dispositivo/IP e data, nunca segredos nem conteúdo de prompts.
 
@@ -60,6 +60,7 @@ Guardar timestamps UTC e IDs aleatórios. Aplicar chaves estrangeiras e índices
 | `POST /v1/auth/login` | Valida email/password e TOTP/código de recuperação; cria sessão web ou tokens Android. |
 | `GET /v1/auth/session` | Devolve identidade e permissões da sessão atual, sem segredos. |
 | `POST /v1/auth/refresh` | Roda refresh token do Android e revoga a utilização anterior. |
+| `POST /v1/auth/firebase/exchange` | Verifica Firebase ID token, liga apenas email verificado já provisionado no Iku, exige TOTP do admin e emite sessão Android Iku. |
 | `POST /v1/auth/logout` | Revoga a sessão e limpa cookie/token. |
 
 Respostas de autenticação usam mensagens genéricas para não revelar se um email existe. Requerer HTTPS e `Content-Type: application/json`; limitar corpos e tempos de resposta.
@@ -73,7 +74,7 @@ Rollout incremental:
 1. Implementar API, schema, bootstrap de uso único, TOTP, sessões, rate limit e testes de segurança. **Concluído.**
 2. Instalar `iku-auth` com PVC e Secrets no VPS. **Concluído; backup e recuperação ainda precisam de configuração.**
 3. Ligar o portal e verificar a página de entrada e a exigência de sessão. **Concluído; falta o primeiro bootstrap pelo utilizador.**
-4. Integrar Android com sessão Iku e Keystore; validar migração Google sem tratar Firebase claims como autorização.
+4. Integrar Android com sessão Iku e Keystore; validar migração Google sem tratar Firebase claims como autorização. **Implementado; validação no dispositivo ainda pendente.**
 5. Colocar gateway à frente de cada app e só então ativar SSO, RBAC e administração.
 
 ## Trade-offs e limites

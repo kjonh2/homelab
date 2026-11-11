@@ -6,6 +6,7 @@ const routes = new Map<string, string>([
   ["GET session", "session"],
   ["POST bootstrap", "bootstrap"],
   ["POST bootstrap/verify-mfa", "bootstrap/verify-mfa"],
+  ["POST firebase/exchange", "firebase/exchange"],
   ["POST login", "login"],
   ["POST refresh", "refresh"],
   ["POST logout", "logout"],
