@@ -8,10 +8,22 @@ function Set-DrisaGamingEnvironment {
     $env:DRISA_LLM_MODEL = 'lfm3-omni'
 }
 
-function Stop-DrisaGamingModelServer {
+function Get-DrisaGamingModelServerProcesses {
+    $unslothRoot = Join-Path $env:USERPROFILE '.unsloth'
     Get-CimInstance Win32_Process | Where-Object {
-        $_.CommandLine -match '(?i)unsloth.*studio|studio.*8888'
-    } | ForEach-Object {
+        $name = [string]$_.Name
+        $path = [string]$_.ExecutablePath
+        $insideUnsloth = $path.StartsWith($unslothRoot + '\', [StringComparison]::OrdinalIgnoreCase)
+        $insideUnsloth -and $name -match '^(?i:unsloth|llama-server)\.exe$'
+    }
+}
+
+function Stop-DrisaGamingModelServer {
+    Get-DrisaGamingModelServerProcesses | ForEach-Object {
+        try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop } catch {}
+    }
+    Start-Sleep -Milliseconds 500
+    Get-DrisaGamingModelServerProcesses | ForEach-Object {
         try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop } catch {}
     }
 }

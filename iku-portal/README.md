@@ -1,8 +1,8 @@
-# Iku Portal UI
+# Iku Portal
 
-Frontend shell based on the portal and authentication notes in `../iku-portal-shell-implementation.md` and `../iku-auth-blueprint.md`.
+Private Next.js portal deployed to the VPS and served only inside the Tailscale tailnet. Login and the initial administrator bootstrap are connected to the `iku-auth` FastAPI service through the server-side API proxy. The portal fails closed when auth is unavailable. The landing and Services pages perform unauthenticated health checks for Nextcloud, n8n, and LFM3; they do not expose user files, workflows, or model prompts.
 
-This is a UI preview. Login, sessions, profile data, device management, service checks, and admin actions are not connected to a backend. The login controls are intentionally inactive and the sections display no personal data. Do not publish this as a working portal until the local auth service, authorization checks, and private gateway are implemented.
+User/device management and a shared auth gateway (SSO) are not implemented. Nextcloud, n8n, and LFM3 keep their own authentication. Do not describe the current setup as SSO.
 
 ## Development
 
@@ -13,4 +13,4 @@ npm run dev
 
 ## Container
 
-The Dockerfile builds a standalone Next.js image on port 3000. Keep it behind an authenticated private gateway; do not publish the container port directly.
+The Dockerfile builds a standalone Next.js image on port 3000. Keep the ClusterIP service private and publish access only through the VPS's tailnet-only Tailscale Serve route.

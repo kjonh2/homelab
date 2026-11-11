@@ -2,7 +2,7 @@
 
 ## Estado atual
 
-O serviço `iku-auth` e a página de entrada/bootstrap do portal estão implementados e instalados no VPS. O serviço está pronto, mas o primeiro administrador ainda tem de concluir o bootstrap no portal. O portal exige sessão e falha fechado; os outros serviços ainda mantêm autenticação própria. Não apresentar o tailnet como sessão Iku nem como SSO.
+O `iku-auth` está instalado no VPS e o primeiro administrador concluiu o bootstrap com TOTP. A aplicação Android foi ligada ao serviço por uma ponte que valida o Firebase ID token e emite uma sessão Iku; a APK atual foi instalada e o hash do pacote instalado coincide com o build local. A sessão Android ainda requer confirmação no ecrã Perfil. O portal exige sessão e falha fechado; Nextcloud, n8n e LFM3 ainda mantêm autenticação própria. O tailnet dá transporte privado, não sessão Iku nem SSO.
 
 ## Objetivos
 
@@ -23,7 +23,7 @@ Traefik/auth gateway ── valida sessão/claims ── Nextcloud, n8n e outros
 - `iku-auth`: API privada no namespace `iku`; uma réplica, sem NodePort ou Ingress público.
 - `auth-db`: SQLite separado dos dados Nextcloud, guardado num PVC e copiado em backups cifrados.
 - `iku-portal`: formulário e páginas de conta; comunica com a API de auth apenas no servidor Next.js.
-- Android: integração com sessões Iku e Android Keystore ainda pendente; a app mantém o login Firebase atual.
+- Android: a ponte Firebase → Iku está implementada; tokens de sessão ficam cifrados com Android Keystore. O login Firebase continua como prova de identidade durante a migração.
 - Gateway: valida sessão ou token e aplica roles/scopes antes de encaminhar pedidos.
 
 O cluster VPS atual é de nó único com armazenamento local. Por isso a base de dados começa com uma réplica e não oferece failover. O worker homelab pode alojar workloads sem estado; não mover a base de dados entre nós sem primeiro definir armazenamento replicado e backups com recuperação testada.
@@ -73,10 +73,10 @@ Rollout incremental:
 
 1. Implementar API, schema, bootstrap de uso único, TOTP, sessões, rate limit e testes de segurança. **Concluído.**
 2. Instalar `iku-auth` com PVC e Secrets no VPS. **Concluído; backup e recuperação ainda precisam de configuração.**
-3. Ligar o portal e verificar a página de entrada e a exigência de sessão. **Concluído; falta o primeiro bootstrap pelo utilizador.**
-4. Integrar Android com sessão Iku e Keystore; validar migração Google sem tratar Firebase claims como autorização. **Implementado; validação no dispositivo ainda pendente.**
+3. Ligar o portal, verificar a exigência de sessão e concluir o primeiro bootstrap. **Concluído; bootstrap e TOTP confirmados na base de dados da VPS.**
+4. Integrar Android com sessão Iku e Keystore; validar migração Google sem tratar Firebase claims como autorização. **Implementado e APK atual instalada; falta o utilizador confirmar a ligação da sessão no Perfil.**
 5. Colocar gateway à frente de cada app e só então ativar SSO, RBAC e administração.
 
 ## Trade-offs e limites
 
-SQLite reduz consumo e manutenção para o uso single-user atual, mas exige uma réplica e backups consistentes. Um IdP completo como Keycloak ofereceria fluxos OAuth/OIDC prontos, com maior consumo e operação. Reavaliar PostgreSQL/HA quando houver mais utilizadores, concorrência ou necessidade de sobreviver à falha da VPS. O login web, MFA TOTP do administrador e sessões estão implementados. O utilizador inicial ainda não foi criado; gestão de utilizadores/dispositivos, migração Android, gateway e SSO continuam por fazer.
+SQLite reduz consumo e manutenção para o uso single-user atual, mas exige uma réplica e backups consistentes. Um IdP completo como Keycloak ofereceria fluxos OAuth/OIDC prontos, com maior consumo e operação. Reavaliar PostgreSQL/HA quando houver mais utilizadores, concorrência ou necessidade de sobreviver à falha da VPS. O login web, MFA TOTP do administrador, sessões Android e a ponte Firebase estão implementados. Gestão de utilizadores/dispositivos, gateway, backups com recuperação testada e SSO continuam por fazer.

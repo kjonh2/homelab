@@ -76,7 +76,7 @@ Homelab is designed to work everywhere. Pick your device:
 | **Linux (Docker)** | ✅ Ready | One-command script |
 | **Windows (Docker Desktop)** | ✅ Ready | One-command script |
 | **macOS (Docker Desktop)** | ✅ Ready | One-command script |
-| **Android** | 🔨 In development | App in development — see [`android/`](./android) |
+| **Android** | 🧪 Private testing | Native Iku app with Firebase sign-in, Iku session bridge, Drisa voice/model controls, files, and printer screens — see [`android/`](./android) |
 | **iOS / iPadOS** | 🔜 Coming | App in development |
 
 ---
