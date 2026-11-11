@@ -148,9 +148,10 @@ class AuthServiceTests(unittest.TestCase):
         self.enable_mfa()
         self.next_totp_window()
         issued = self.login(client="android").json()
+        self.clock_offset += main.ACCESS_TOKEN_TTL + 1
         logged_out = self.client.post("/v1/auth/logout", headers={
             "Authorization": f"Bearer {issued['access_token']}",
-        })
+        }, json={"refresh_token": issued["refresh_token"]})
         self.assertEqual(logged_out.status_code, 204)
         session = self.client.get("/v1/auth/session", headers={
             "Authorization": f"Bearer {issued['access_token']}",

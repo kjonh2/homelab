@@ -94,6 +94,10 @@ class RefreshInput(StrictModel):
     device_name: str = Field(default="", max_length=100)
 
 
+class LogoutInput(StrictModel):
+    refresh_token: str | None = Field(default=None, min_length=32, max_length=512)
+
+
 class FirebaseExchangeInput(StrictModel):
     id_token: str = Field(min_length=100, max_length=8192)
     totp_code: str | None = Field(default=None, min_length=6, max_length=16)
@@ -844,19 +848,38 @@ def refresh(body: RefreshInput, request: Request) -> dict[str, Any]:
 
 
 @app.post("/v1/auth/logout", status_code=204)
-def logout(request: Request, response: Response) -> Response:
+def logout(request: Request, response: Response, body: LogoutInput | None = None) -> Response:
     is_browser_session = not request.headers.get("authorization", "").lower().startswith("bearer ")
     verify_origin(request, required=is_browser_session)
     db = connect()
     try:
         loaded = load_user_for_token(db, request)
+        refresh_row = None
+        if body and body.refresh_token:
+            refresh_row = db.execute(
+                "SELECT user_id,family_id FROM refresh_tokens WHERE token_hash=?",
+                (digest_token(body.refresh_token),),
+            ).fetchone()
         if loaded:
             session_row, _, _ = loaded
             now = utc_now()
+            if refresh_row and session_row["refresh_family"] != refresh_row["family_id"]:
+                raise HTTPException(status_code=400, detail="session_token_mismatch")
             db.execute("UPDATE sessions SET revoked_at=? WHERE id=?", (now, session_row["id"]))
-            if session_row["refresh_family"]:
-                db.execute("UPDATE refresh_tokens SET revoked_at=? WHERE family_id=? AND revoked_at IS NULL", (now, session_row["refresh_family"]))
-            audit(db, session_row["user_id"], "auth.logout", "success", session_row["client"], request_ip(request))
+            family_id = session_row["refresh_family"]
+            user_id = session_row["user_id"]
+        elif refresh_row:
+            now = utc_now()
+            family_id = refresh_row["family_id"]
+            user_id = refresh_row["user_id"]
+        else:
+            family_id = None
+            user_id = None
+        if family_id:
+            db.execute("UPDATE refresh_tokens SET revoked_at=? WHERE family_id=? AND revoked_at IS NULL", (now, family_id))
+            db.execute("UPDATE sessions SET revoked_at=? WHERE refresh_family=? AND revoked_at IS NULL", (now, family_id))
+        if user_id:
+            audit(db, user_id, "auth.logout", "success", "android" if family_id else "web", request_ip(request))
             db.commit()
         response.delete_cookie(SESSION_COOKIE, path="/", secure=True, httponly=True, samesite="strict")
         response.status_code = 204

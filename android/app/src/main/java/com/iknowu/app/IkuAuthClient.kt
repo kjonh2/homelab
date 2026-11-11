@@ -59,17 +59,18 @@ internal object IkuAuthClient {
     fun logout(activity: Activity, completed: (() -> Unit)? = null) {
         val saved = IkuAuthSessionStore.read(activity)
         val accessToken = saved?.optString("access_token").orEmpty()
-        if (accessToken.isBlank()) {
+        val refreshToken = saved?.optString("refresh_token").orEmpty()
+        if (accessToken.isBlank() && refreshToken.isBlank()) {
             IkuAuthSessionStore.clear(activity)
             completed?.invoke()
             return
         }
-        val request = Request.Builder()
+        val requestBuilder = Request.Builder()
             .url(BASE_URL + "/api/auth/logout")
-            .post("{}".toRequestBody(jsonType))
-            .header("Authorization", "Bearer $accessToken")
+            .post(JSONObject().put("refresh_token", refreshToken).toString().toRequestBody(jsonType))
             .header("Accept", "application/json")
-            .build()
+        if (accessToken.isNotBlank()) requestBuilder.header("Authorization", "Bearer $accessToken")
+        val request = requestBuilder.build()
         http.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
                 activity.runOnUiThread {

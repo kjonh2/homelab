@@ -6,7 +6,7 @@ The VPS is the first K3s server. It uses the embedded SQLite datastore, encrypte
 
 K3s is installed on `vps-4e5174e4` as a single-node cluster. It currently has no public ingress. Additional nodes must reach the API over the private Tailscale network; do not open 6443, VXLAN 8472, or kubelet 10250 to the public Internet.
 
-Host security was checked on 2026-11-11: UFW is enabled with incoming traffic denied by default; SSH is key-only (`PasswordAuthentication no`, `PermitRootLogin no`, `MaxAuthTries 3`) and rate-limited. TCP/6443 and TCP/10250 did not accept connections over the VPS public address. `unattended-upgrades` is enabled. The host Docker daemon had no running containers and is now disabled; K3s continues on its own containerd. If rebuilding an image on the VPS, temporarily start Docker and stop it again after importing the image into K3s.
+Host security was checked on 2026-11-11: UFW is enabled with incoming traffic denied by default; SSH is key-only (`PasswordAuthentication no`, `PermitRootLogin no`, `MaxAuthTries 3`) and rate-limited. TCP/6443 and TCP/10250 did not accept connections over the VPS public address. `unattended-upgrades` is enabled. The host Docker daemon had no running containers and is disabled; K3s continues on its own containerd. If rebuilding an image on the VPS, temporarily start Docker with `sudo systemctl start docker.service`, then stop it again with `sudo systemctl disable --now docker.service docker.socket` after importing the image into K3s.
 
 See [the current VPS capacity snapshot](../../docs/iku/iku-vps-capacity.md) for the observed resource budget and deployment limits.
 
@@ -14,7 +14,7 @@ See [the current VPS capacity snapshot](../../docs/iku/iku-vps-capacity.md) for 
 
 The private portal at the VPS tailnet root checks Nextcloud, n8n, and LFM3 from inside the cluster and shows their current health on the home and Services pages. The app checks only unauthenticated health endpoints and does not read user files, workflows, or model prompts. Links require a device connected to the tailnet. The laptop Drisa gateway is marked as local because the VPS cannot verify its state.
 
-The health probe URLs can be overridden with `NEXTCLOUD_HEALTH_URL`, `N8N_HEALTH_URL`, and `LFM3_HEALTH_URL` on the portal Deployment. Probes time out after 2.5 seconds. The local identity API and portal login/bootstrap UI are deployed to the VPS (`iku-auth:0.1.2`, `iku-portal:0.1.3`). The portal fails closed with `IKU_AUTH_ENFORCE=true`. Complete the first administrator bootstrap using the local token file described below. Profile, device, session-management, and broader admin actions remain incomplete. Service pages only check unauthenticated health endpoints.
+The health probe URLs can be overridden with `NEXTCLOUD_HEALTH_URL`, `N8N_HEALTH_URL`, and `LFM3_HEALTH_URL` on the portal Deployment. Probes time out after 2.5 seconds. The local identity API and portal login/bootstrap UI are deployed to the VPS (`iku-auth:0.1.3`, `iku-portal:0.1.3`). The portal fails closed with `IKU_AUTH_ENFORCE=true`. Complete the first administrator bootstrap using the local token file described below. Profile, device, session-management, and broader admin actions remain incomplete. Service pages only check unauthenticated health endpoints.
 
 ### Local Iku Auth
 
