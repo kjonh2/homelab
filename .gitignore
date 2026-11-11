@@ -2,6 +2,15 @@
 .env
 .env.local
 .env.production
+.env.*
+!.env.example
+!**/.env.example
+android/.env.github
+*.key
+*_token.txt
+**/credentials/
+**/credentials.json
+**/service-account*.json
 
 # Docker volumes (persistent data)
 volumes/
@@ -18,3 +27,15 @@ traefik/acme.json
 # OS
 .DS_Store
 Thumbs.db
+
+# JavaScript build outputs
+node_modules/
+.next/
+out/
+coverage/
+
+# Android build outputs and local configuration
+**/build/
+**/local.properties
+*.apk
+*.aab
