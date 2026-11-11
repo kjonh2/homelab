@@ -1,12 +1,29 @@
 import { notFound } from "next/navigation";
 import { ArrowRight, LockKeyhole } from "lucide-react";
 import { PreviewNotice } from "@/components/iku/portal-shell";
+import { ServiceCards } from "@/components/iku/service-cards";
 import { sectionBySlug } from "@/lib/portal-sections";
+import { getServiceStatus } from "@/lib/services";
+
+export const dynamic = "force-dynamic";
 
 export default async function SectionPage({ params }: { params: Promise<{ section: string }> }) {
   const { section: slug } = await params;
   const section = sectionBySlug[slug];
   if (!section) notFound();
+
+  if (slug === "services") {
+    const services = await getServiceStatus();
+    const online = services.filter((service) => service.state === "online").length;
+    return (
+      <div className="section-page">
+        <PreviewNotice />
+        <div className="page-heading"><div><span className="eyebrow muted-eyebrow">VPS · ESTADO AO VIVO</span><h1>Serviços</h1><p>{online} de {services.length} serviços respondem pela rede do cluster.</p></div></div>
+        <ServiceCards services={services} />
+        <div className="setup-card"><div><span className="eyebrow muted-eyebrow">ACESSO</span><h3>Os atalhos são privados</h3><p>Abre o serviço com um dispositivo ligado ao tailnet Tailscale e autorizado nesta rede.</p></div></div>
+      </div>
+    );
+  }
 
   const admin = slug === "admin";
   return (

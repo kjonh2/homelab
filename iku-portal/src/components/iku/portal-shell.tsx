@@ -77,7 +77,7 @@ export function PortalShell({ children }: Readonly<{ children: React.ReactNode }
             <div className="breadcrumb"><span>Iku</span><ChevronRight size={15} /><strong>{current?.label ?? "Início"}</strong></div>
           </div>
           <div className="topbar-actions">
-            <span className="preview-pill"><span className="status-dot" /> Pré-visualização</span>
+            <span className="preview-pill"><span className="status-dot" /> Área parcial</span>
             <button className="icon-button help-button" aria-label="Ajuda"><CircleHelp size={19} /></button>
             <button className="icon-button" aria-label="Notificações"><Bell size={19} /><span className="notification-dot" /></button>
             <span className="avatar avatar-small">F</span>
@@ -91,5 +91,5 @@ export function PortalShell({ children }: Readonly<{ children: React.ReactNode }
 }
 
 export function PreviewNotice() {
-  return <div className="preview-notice"><Cloud size={17} /><span>Esta pré-visualização ainda não está ligada aos teus serviços ou dados pessoais.</span><ArrowUpRight size={15} /></div>;
+  return <div className="preview-notice"><Cloud size={17} /><span>O estado dos serviços é consultado ao vivo. Perfil, sessões e gestão de dispositivos ainda precisam do serviço de identidade.</span></div>;
 }

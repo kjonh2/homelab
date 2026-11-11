@@ -8,6 +8,12 @@ K3s is installed on `vps-4e5174e4` as a single-node cluster. It currently has no
 
 See [the current VPS capacity snapshot](../../docs/iku/iku-vps-capacity.md) for the observed resource budget and deployment limits.
 
+## Iku portal
+
+The private portal at the VPS tailnet root checks Nextcloud, n8n, and LFM3 from inside the cluster and shows their current health on the home and Services pages. The app checks only unauthenticated health endpoints and does not read user files, workflows, or model prompts. Links require a device connected to the tailnet. The laptop Drisa gateway is marked as local because the VPS cannot verify its state.
+
+The health probe URLs can be overridden with `NEXTCLOUD_HEALTH_URL`, `N8N_HEALTH_URL`, and `LFM3_HEALTH_URL` on the portal Deployment. Probes time out after 2.5 seconds. The profile, device, session, and administration pages remain placeholders until an identity service is implemented; the login form is disabled.
+
 ## LFM3
 
 The ClusterIP service runs llama.cpp in router mode and discovers GGUFs in `/opt/iku/models`. It lists each model's loaded state and accepts authenticated load requests. `--models-max 1` keeps only one model resident at a time; the model directory is read-only in the Pod. The API key is supplied as a Kubernetes Secret generated on the VPS. The Deployment uses the official llama.cpp server image pinned to the published multi-architecture digest for build `b12242`, CPU inference, four threads, one parallel request, and a 4 GiB memory ceiling.
