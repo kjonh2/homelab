@@ -1,53 +1,83 @@
-# Iku Auth — arquitetura final
+# Iku Auth — arquitetura de implementação
 
-## Objetivo
-Um login local único para todo o Iku, com 2FA, roles e API tokens, para servir:
-- `iknowu.org/n8n`
-- `iknowu.org/confy`
-- `iknowu.org/webui`
-- `iknowu.org/cloud`
-- áreas admin como `gitlab`, `ai`, `grafana`
+## Estado atual
 
-## Identidade
-- Email + password
-- 2FA obrigatório para admin
-- sessões web partilhadas
-- tokens de API por app/dispositivo
+O serviço de identidade ainda não está implementado. O portal e os serviços da VPS são acessíveis apenas através do tailnet, mas as páginas de conta do portal são placeholders e os serviços mantêm autenticação própria. Não apresentar o tailnet como sessão Iku nem como SSO.
 
-## Roles
-- `admin` — acesso total
-- `server` — gestão/infra/deploy
-- `user` — uso normal
-- `api` — integrações e automações
+## Objetivos
 
-## Fluxo
-1. utilizador entra no portal `iknowu.org`
-2. autentica no Iku Auth local
-3. o portal cria sessão
-4. o proxy encaminha para o serviço certo
-5. o serviço valida a sessão/claims/headers/token
+- Uma identidade local para o portal, a app Android e as APIs Iku.
+- Sessões e permissões controladas pelo Iku, com revogação e auditoria.
+- TOTP obrigatório para administradores.
+- Tokens de API distintos por dispositivo e com scopes mínimos.
+- Não depender do Firebase para autorizar acesso aos dados e serviços Iku.
 
-## Segurança
-- 2FA por TOTP ou equivalente
-- refresh de sessão
-- logout global
-- revogação de tokens
-- logs de acesso
-- rate limiting no login
+## Componentes e fronteiras
 
-## Implementação recomendada
-- Portal Iku como frontend
-- Auth local como backend central
-- JWT ou cookie de sessão assinado
-- headers internos entre proxy e apps
-- roles guardadas no backend
-- API tokens separados para Android e automações
+```text
+Browser ── HTTPS/Tailscale ── Iku Portal ── ClusterIP ── Iku Auth ── SQLite PVC
+Android ── HTTPS/Tailscale ───────────────────────────────┘
+Traefik/auth gateway ── valida sessão/claims ── Nextcloud, n8n e outros serviços
+```
 
-## Regras de acesso
-- público autenticado: `cloud`, `n8n`, `confy`, `webui`
-- admin: `gitlab`, `ai`, `grafana`
-- tudo passa pela mesma identidade Iku
+- `iku-auth`: API privada no namespace `iku`; uma réplica, sem NodePort ou Ingress público.
+- `auth-db`: SQLite separado dos dados Nextcloud, guardado num PVC e copiado em backups cifrados.
+- `iku-portal`: formulário e páginas de conta; comunica com a API de auth apenas no servidor Next.js.
+- Android: envia credenciais ao serviço Iku Auth e guarda refresh/API material no Android Keystore.
+- Gateway: valida sessão ou token e aplica roles/scopes antes de encaminhar pedidos.
 
-## Decisão
-O Iku não usa Firebase como auth principal.
-Firebase pode ficar só para componentes específicos, mas a identidade principal é local.
+O cluster VPS atual é de nó único com armazenamento local. Por isso a base de dados começa com uma réplica e não oferece failover. O worker homelab pode alojar workloads sem estado; não mover a base de dados entre nós sem primeiro definir armazenamento replicado e backups com recuperação testada.
+
+## Identidade e migração Android
+
+- Email e palavra-passe local são a forma principal de autenticação.
+- O Auth cria as sessões Iku, aplica roles, MFA e revogação. Um Firebase ID token nunca vale como sessão Iku nem como autorização de serviço.
+- Durante a migração, o botão Google pode continuar como prova de identidade externa: o Auth verifica o token e troca-o por uma sessão Iku local; a autorização continua a vir das tabelas Iku. Remover esse caminho apenas depois de confirmar o primeiro login local no Android.
+- Não habilitar registo público. Criar a primeira conta `admin` através de um token aleatório de bootstrap, de uso único, fornecido por Secret e removido depois de concluído.
+- O admin tem de configurar TOTP antes de receber uma sessão com privilégios. Guardar os segredos TOTP cifrados e guardar hashes dos códigos de recuperação.
+
+## Sessões, tokens e proteção
+
+- Sessão web opaca, aleatória e revogável, persistida como hash no banco de dados; cookie `Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/`, com expiração limitada e rotação após autenticação/MFA.
+- Verificar `Origin` nas mutações web e usar token CSRF. Nunca aceitar credenciais ou tokens em query strings.
+- Android recebe access token de curta duração e refresh token rotativo. Guardar hash do refresh token, família, dispositivo, expiração e revogação; guardar o segredo apenas no Keystore no cliente.
+- Tokens de API têm prefixo identificável, hash no banco, nome de dispositivo, scopes, criação, última utilização, expiração e revogação. Mostrar o valor apenas uma vez.
+- Hash de palavra-passe com Argon2id e parâmetros atualizáveis; comparação de tempo constante para tokens. Limitar tentativas por IP e identificador, sem registar palavras-passe, códigos MFA ou tokens.
+- Chaves de assinatura, credenciais bootstrap e chaves de cifragem chegam por Kubernetes Secret montado como ficheiro. Não usar ConfigMap, imagem, manifestos versionados ou logs para material secreto.
+
+## Modelo de dados
+
+`users`, `roles`, `user_roles`, `mfa_factors`, `recovery_codes`, `sessions`, `refresh_tokens`, `api_tokens`, `audit_events`, `login_attempts`.
+
+Guardar timestamps UTC e IDs aleatórios. Aplicar chaves estrangeiras e índices para utilizador, sessão, dispositivo, expiração e hash do token. Eventos de auditoria registam resultado, ação, utilizador quando conhecido, dispositivo/IP e data, nunca segredos nem conteúdo de prompts.
+
+## API inicial
+
+| Método e rota | Uso |
+| --- | --- |
+| `POST /v1/auth/login` | Valida email/password; devolve desafio MFA quando necessário. |
+| `POST /v1/auth/mfa/totp` | Verifica TOTP ou código de recuperação e conclui login. |
+| `POST /v1/auth/google/exchange` | Verifica Google ID token e emite sessão Iku durante a migração Android. |
+| `GET /v1/auth/session` | Devolve identidade e permissões da sessão atual, sem segredos. |
+| `POST /v1/auth/refresh` | Roda refresh token do Android e revoga a utilização anterior. |
+| `POST /v1/auth/logout` | Revoga a sessão e limpa cookie/token. |
+| `/v1/tokens` | Criar, listar metadados e revogar tokens por dispositivo. |
+| `/v1/admin/*` | Gestão de utilizadores, roles, MFA e sessões; requer role `admin` e MFA recente. |
+
+Respostas de autenticação usam mensagens genéricas para não revelar se um email existe. Requerer HTTPS e `Content-Type: application/json`; limitar corpos e tempos de resposta.
+
+## SSO e rollout
+
+Os endpoints atuais de Tailscale Serve expõem diretamente o portal, n8n, Nextcloud e LFM3 em portas separadas. Isso não cria uma sessão comum. Manter a autenticação própria de cada serviço enquanto se instala e verifica o gateway. Depois encaminhar cada serviço através do gateway, bloquear rotas de acesso direto e testar sessão, logout, MFA, permissões e recuperação antes de anunciar SSO. O LFM3 e a Drisa mantêm também os seus tokens de serviço para autenticação máquina-a-máquina.
+
+Rollout incremental:
+
+1. Implementar API, schema versionado, bootstrap de uso único, TOTP, sessões, rate limit e testes de segurança.
+2. Instalar `iku-auth` com PVC e Secrets no VPS; confirmar backup e recuperação da base de dados.
+3. Ligar o portal e validar login, MFA, logout e expiração na rota Tailscale.
+4. Integrar Android com sessão Iku e Keystore; validar migração Google sem tratar Firebase claims como autorização.
+5. Colocar gateway à frente de cada app e só então ativar SSO, RBAC e administração.
+
+## Trade-offs e limites
+
+SQLite reduz consumo e manutenção para o uso single-user atual, mas exige uma réplica e backups consistentes. Um IdP completo como Keycloak ofereceria fluxos OAuth/OIDC prontos, com maior consumo e operação. Reavaliar PostgreSQL/HA quando houver mais utilizadores, concorrência ou necessidade de sobreviver à falha da VPS. Até o gateway e o bootstrap estarem implementados, login, MFA, administração e SSO continuam por fazer.
