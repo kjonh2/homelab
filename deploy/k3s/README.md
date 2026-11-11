@@ -72,14 +72,14 @@ Install the APK built from `android/` with `gradlew.bat :app:assembleModernDebug
 
 ## Laptop Gaming mode
 
-The Drisa mode switch lives at `C:\Users\kjonh\workspace\drisa\drisa_mode.ps1`:
+The Drisa mode switch lives at `C:\Users\kjonh\workspace\drisa\drisa_mode.ps1`. The gaming environment configuration is versioned at [`deploy/windows/drisa_remote_config.ps1`](../../deploy/windows/drisa_remote_config.ps1) and copied to `workspace/drisa` so the launcher can dot-source it:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File C:\Users\kjonh\workspace\drisa\drisa_mode.ps1 gaming
 powershell -ExecutionPolicy Bypass -File C:\Users\kjonh\workspace\drisa\drisa_mode.ps1 normal
 ```
 
-Gaming mode stops the local Unsloth model server and 3D world while retaining the microphone listener and voice gateway. It selects local Whisper.cpp transcription, Windows PT-PT speech, and the VPS LFM3 endpoint. The mode is prepared but not activated. The VPS and laptop routes are private to the tailnet; the phone voice flow still needs a user-side connection check. The homelab is registered as a tainted K3s fallback worker; current workloads remain on the VPS.
+Gaming mode stops the local Unsloth model server and 3D world while retaining the microphone listener and voice gateway. It selects local Whisper.cpp transcription, Windows PT-PT speech, and the VPS LFM3 router using model ID `lfm3-omni`. The mode is prepared but not activated. The VPS and laptop routes are private to the tailnet; the phone app still needs a final on-device check. The homelab is registered as a tainted K3s fallback worker; current workloads remain on the VPS.
 
 After restarting the K3s server on the VPS, verify the `iku-portal-forward`, `iku-n8n-forward`, `iku-nextcloud-forward`, and `iku-lfm3-forward` systemd units. Restart them if inactive:
 
