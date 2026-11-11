@@ -16,7 +16,7 @@ The health probe URLs can be overridden with `NEXTCLOUD_HEALTH_URL`, `N8N_HEALTH
 
 ## LFM3
 
-The ClusterIP service runs llama.cpp in router mode and discovers GGUFs in `/opt/iku/models`. It lists each model's loaded state and accepts authenticated load requests. `--models-max 1` keeps only one model resident at a time; the model directory is read-only in the Pod. The API key is supplied as a Kubernetes Secret generated on the VPS. The Deployment uses the official llama.cpp server image pinned to the published multi-architecture digest for build `b12242`, CPU inference, four threads, one parallel request, and a 4 GiB memory ceiling.
+The ClusterIP service runs llama.cpp in router mode and discovers GGUFs in `/opt/iku/models`. It lists each model's loaded state and accepts authenticated load requests. `--models-max 1` keeps only one model resident at a time; `--reasoning off` keeps internal reasoning out of generated answers. The model directory is read-only in the Pod. The API key is supplied as a Kubernetes Secret generated on the VPS. The Deployment uses the official llama.cpp server image pinned to the published multi-architecture digest for build `b12242`, CPU inference, four threads, one parallel request, and a 4 GiB memory ceiling.
 
 On the VPS, create the API key without printing it, then apply the secret:
 
@@ -26,6 +26,9 @@ sudo sh -c 'umask 077; test -s /etc/rancher/k3s/secrets/lfm3.env || printf "LLAM
 sudo install -d -o root -g root -m 755 /opt/iku/models
 sudo cp -L /home/ubuntu/.cache/huggingface/hub/models--LiquidAI--LFM3-1.7B-GGUF/snapshots/cd0c74c575b5c416f3011b5b4c298077f26ca8c2/LFM3-1.7B-Q4_K_M.gguf /opt/iku/models/lfm3-text.gguf
 sudo cp -L /home/ubuntu/.cache/huggingface/hub/models--LiquidAI--LFM3-Omni-2B-GGUF/snapshots/d508b88f08a5b4286f2d2805a6a8d69a0ff44c72/LFM3-Omni-2B-Q4_K_M.gguf /opt/iku/models/lfm3-omni.gguf
+sudo curl --fail --location --retry 3 'https://huggingface.co/AtomicChat/LFM3-1.7B-Uncensored-GGUF/resolve/main/LFM3-1.7B-Uncensored-AD-Q4_K_M.gguf?download=true' --output /opt/iku/models/lfm3-uncensored.gguf
+sudo chown root:root /opt/iku/models/lfm3-uncensored.gguf
+sudo chmod 644 /opt/iku/models/lfm3-uncensored.gguf
 sudo chmod 644 /opt/iku/models/*.gguf
 sudo k3s kubectl apply -f /opt/homelab/deploy/k3s/namespace.yaml
 sudo k3s kubectl -n iku create secret generic lfm3-api --from-env-file=/etc/rancher/k3s/secrets/lfm3.env --dry-run=client -o yaml | sudo k3s kubectl apply -f -
@@ -38,10 +41,11 @@ Load one of the installed models without restarting the Pod:
 
 ```bash
 sudo /opt/homelab/deploy/k3s/switch-lfm3-model.sh text
+sudo /opt/homelab/deploy/k3s/switch-lfm3-model.sh uncensored
 sudo /opt/homelab/deploy/k3s/switch-lfm3-model.sh omni
 ```
 
-The Iku Android app's **Drisa → Modelos da Drisa** panel can list and load models on the VPS or the laptop. It shows only models discovered on each host. The VPS currently exposes the LLM category; transcription and Kokoro TTS remain on the laptop.
+The VPS exposes the official LFM3 text and Omni models plus [AtomicChat's LFM3-1.7B-Uncensored Q4 model](https://huggingface.co/AtomicChat/LFM3-1.7B-Uncensored-GGUF). The uncensored model is the active VPS text selection. All are served through the authenticated llama.cpp router, with one model resident at a time. The Iku Android app's **Drisa → Modelos da Drisa** panel can list and load models on the VPS or the laptop; transcription and Kokoro TTS remain on the laptop.
 
 ## Nextcloud and n8n
 

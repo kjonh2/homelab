@@ -5,7 +5,8 @@ variant="${1:-}"
 case "$variant" in
   text) model_id='lfm3-text' ;;
   omni) model_id='lfm3-omni' ;;
-  *) echo 'Usage: sudo ./switch-lfm3-model.sh text|omni' >&2; exit 2 ;;
+  uncensored) model_id='lfm3-uncensored' ;;
+  *) echo 'Usage: sudo ./switch-lfm3-model.sh text|uncensored|omni' >&2; exit 2 ;;
 esac
 
 kubectl_bin=(sudo k3s kubectl)

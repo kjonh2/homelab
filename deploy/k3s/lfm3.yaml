@@ -6,7 +6,7 @@ metadata:
     app.kubernetes.io/part-of: iku
 spec:
   capacity:
-    storage: 3Gi
+    storage: 4Gi
   volumeMode: Filesystem
   accessModes:
     - ReadWriteOnce
@@ -76,6 +76,8 @@ spec:
             - --models-max
             - "1"
             - --no-models-autoload
+            - --reasoning
+            - "off"
             - --host
             - 0.0.0.0
             - --port
