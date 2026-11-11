@@ -6,6 +6,8 @@ The VPS is the first K3s server. It uses the embedded SQLite datastore, encrypte
 
 K3s is installed on `vps-4e5174e4` as a single-node cluster. It currently has no public ingress. Additional nodes must reach the API over the private Tailscale network; do not open 6443, VXLAN 8472, or kubelet 10250 to the public Internet.
 
+Host security was checked on 2026-11-11: UFW is enabled with incoming traffic denied by default; SSH is key-only (`PasswordAuthentication no`, `PermitRootLogin no`, `MaxAuthTries 3`) and rate-limited. TCP/6443 and TCP/10250 did not accept connections over the VPS public address. `unattended-upgrades` is enabled. The host Docker daemon had no running containers and is now disabled; K3s continues on its own containerd. If rebuilding an image on the VPS, temporarily start Docker and stop it again after importing the image into K3s.
+
 See [the current VPS capacity snapshot](../../docs/iku/iku-vps-capacity.md) for the observed resource budget and deployment limits.
 
 ## Iku portal
