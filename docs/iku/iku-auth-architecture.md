@@ -2,7 +2,7 @@
 
 ## Estado atual
 
-O `iku-auth` está instalado no VPS e o primeiro administrador concluiu o bootstrap com TOTP. A aplicação Android foi ligada ao serviço por uma ponte que valida o Firebase ID token e emite uma sessão Iku; a APK atual foi instalada e o hash do pacote instalado coincide com o build local. A sessão Android ainda requer confirmação no ecrã Perfil. O portal exige sessão e falha fechado; Nextcloud, n8n e LFM3 ainda mantêm autenticação própria. O tailnet dá transporte privado, não sessão Iku nem SSO.
+O `iku-auth` está instalado no VPS e o primeiro administrador concluiu o bootstrap com TOTP. A aplicação Android foi ligada ao serviço por uma ponte que valida o Firebase ID token e emite uma sessão Iku; a APK atual foi instalada e o hash do pacote instalado coincide com o build local. A sessão foi confirmada no Redmi: o Perfil mostra **Sessão Iku já ligada** e a base de dados contém sessões web e Android. O portal exige sessão e falha fechado; Nextcloud, n8n e LFM3 ainda mantêm autenticação própria. O tailnet dá transporte privado, não sessão Iku nem SSO.
 
 ## Objetivos
 
@@ -74,7 +74,7 @@ Rollout incremental:
 1. Implementar API, schema, bootstrap de uso único, TOTP, sessões, rate limit e testes de segurança. **Concluído.**
 2. Instalar `iku-auth` com PVC e Secrets no VPS. **Concluído; backup Restic diário cifrado para o homelab instalado, integridade verificada e uma base SQLite restaurada com `PRAGMA integrity_check=ok`.**
 3. Ligar o portal, verificar a exigência de sessão e concluir o primeiro bootstrap. **Concluído; bootstrap e TOTP confirmados na base de dados da VPS.**
-4. Integrar Android com sessão Iku e Keystore; validar migração Google sem tratar Firebase claims como autorização. **Implementado e APK atual instalada; falta o utilizador confirmar a ligação da sessão no Perfil.**
+4. Integrar Android com sessão Iku e Keystore; validar migração Google sem tratar Firebase claims como autorização. **Concluído; login Firebase trocado por sessão Android Iku após confirmação TOTP no Redmi, e a sessão ativa foi confirmada no servidor.**
 5. Colocar gateway à frente de cada app e só então ativar SSO, RBAC e administração.
 
 ## Trade-offs e limites
