@@ -127,7 +127,9 @@ class DrisaVoiceActivity : AppCompatActivity() {
     private fun connect() {
         val url = endpoint.text.toString().trim()
         val id = deviceId.text.toString().trim()
-        val secret = token.text.toString()
+        val secret = token.text.toString().ifBlank {
+            runCatching { SecureDrisaSettings.load(this) }.getOrNull().orEmpty()
+        }
         if (!url.startsWith("wss://") || id.isBlank() || secret.isBlank()) {
             setStatus("Indica um endereço wss://, o identificador e o token.")
             return
