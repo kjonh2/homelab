@@ -1,0 +1,61 @@
+name: Homelab checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  auth-and-drisa-tests:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Install Auth test dependencies
+        run: python -m pip install -r services/iku-auth/requirements-dev.txt
+
+      - name: Install Drisa test dependencies
+        run: python -m pip install requests==2.34.2 websockets==17.3 numpy==2.4.6 sounddevice==0.5.5
+
+      - name: Run Auth and Drisa tests
+        run: >-
+          python -m pytest -q
+          services/iku-auth/tests
+          deploy/windows/test_drisa_voice_gateway.py
+          deploy/windows/test_drisa_speech_text.py
+          deploy/windows/test_voice_loop_local.py
+
+  web-builds:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "22"
+
+      - name: Build Iku portal
+        working-directory: iku-portal
+        run: npm ci && npm run build
+
+      - name: Build public landing page
+        working-directory: public-site
+        run: npm ci && npm run build
