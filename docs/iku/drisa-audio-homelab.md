@@ -41,6 +41,6 @@ Invoke-RestMethod http://127.0.0.1:8766/v1/models
 
 - The gateway catalog returned `moss` as selected STT, `parakeet` as fallback, and `kokoro` as selected TTS. Both the app gateway and Gaming-mode voice loop now load each homelab model before inference. MOSS has a 30-second transcription deadline; on timeout the path loads and tries Parakeet.
 - On a Portuguese 1.45-second WAV, MOSS loaded but did not return within five minutes. Parakeet transcribed “Sistema pronto.” in 4.6 seconds. The gateway's real MOSS-to-Parakeet fallback returned the same transcript in 81 seconds on its first cold run. Future runs should be faster while both models remain loaded, but CPU is near saturation.
-- LFM on the VPS returned “Sistema pronto.” in 9.7 seconds. The gateway then produced Kokoro audio; the first cold request completed in 54.5 seconds. The WAV was played locally.
+- LFM on the VPS returned “Sistema pronto.” in 9.7 seconds. The LFM-plus-Kokoro gateway call completed in 54.5 seconds on the cold run; Kokoro audio was produced and the WAV was played locally.
 - The app's model catalog and load handlers were unit tested, but the Redmi was not connected for UI or full microphone validation. Do not treat the Android conversation path as verified until a physical-device test passes.
 - This service is private and ClusterIP-only. Do not open port 8080 or add a public ingress.
