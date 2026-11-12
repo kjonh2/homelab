@@ -45,14 +45,17 @@ export default async function SectionPage({ params }: { params: Promise<{ sectio
     return <div className="section-page"><PreviewNotice /><div className="page-heading"><div><span className="eyebrow muted-eyebrow">ACESSO À CONTA</span><h1>Dispositivos</h1><p>Consulta os dispositivos ligados à tua conta e termina acessos que já não reconheces.</p></div></div><SessionManager /></div>;
   }
 
-  if (slug === "profile" || slug === "sessions" || slug === "security") {
+  if (slug === "sessions") {
+    return <div className="section-page"><PreviewNotice /><div className="page-heading"><div><span className="eyebrow muted-eyebrow">SESSÕES ATIVAS</span><h1>Sessões</h1><p>Consulta e termina os dispositivos com acesso à tua conta Iku.</p></div></div><SessionManager /></div>;
+  }
+
+  if (slug === "profile" || slug === "security") {
     const current = session?.session;
     const user = session?.user;
     const details = {
       profile: { eyebrow: "CONTA IKU", title: "Perfil", icon: UserRound, heading: user?.email ?? "Conta não disponível", body: `Função: ${user?.roles.join(", ") || "conta"}. O portal usa autenticação local Iku.`, meta: `ID de utilizador: ${user?.id ?? "indisponível"}` },
       security: { eyebrow: "PROTEÇÃO DA CONTA", title: "Segurança", icon: ShieldCheck, heading: user?.mfa_enabled ? "2FA ativo" : "2FA não ativo", body: "O login do portal usa sessão Iku protegida por cookie. O primeiro administrador requer 2FA; a gestão de fatores e tokens ainda não está disponível nesta página.", meta: "Acesso às páginas privadas limitado ao tailnet Tailscale." },
     }[slug];
-    if (slug === "sessions") return <div className="section-page"><PreviewNotice /><div className="page-heading"><div><span className="eyebrow muted-eyebrow">SESSÕES ATIVAS</span><h1>Sessões</h1><p>Consulta e termina os dispositivos com acesso à tua conta Iku.</p></div></div><SessionManager /></div>;
     const Icon = details.icon;
     return <div className="section-page"><PreviewNotice /><div className="page-heading"><div><span className="eyebrow muted-eyebrow">{details.eyebrow}</span><h1>{details.title}</h1><p>Informação fornecida pela sessão autenticada atual.</p></div></div><section className="empty-panel"><div className="empty-icon"><Icon size={22} /></div><div className="empty-copy"><h2>{details.heading}</h2><p>{details.body}</p><span className="pending-line"><KeyRound size={13} /> {details.meta}</span></div></section></div>;
   }
