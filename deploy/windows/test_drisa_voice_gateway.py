@@ -45,6 +45,30 @@ class AudioPayloadTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             decode_audio_payload(encoded)
 
+    def test_llm_echo_is_not_returned_for_tts(self):
+        import requests
+
+        utterance = "Qual é o estado dos meus serviços agora?"
+
+        class FakeResponse:
+            @staticmethod
+            def raise_for_status():
+                return None
+
+            @staticmethod
+            def json():
+                return {"choices": [{"message": {"content": utterance}}]}
+
+        with (
+            patch.object(gateway, "_unsloth_cfg", return_value={
+                "llm_model": "test-model",
+                "llm_url": "http://127.0.0.1:1/v1",
+                "llm_key": "",
+            }),
+            patch.object(requests, "post", return_value=FakeResponse()),
+        ):
+            self.assertEqual(gateway.llm_reply(utterance), "")
+
 
 class GatewayAsyncAudioTests(unittest.IsolatedAsyncioTestCase):
     async def test_slow_inference_does_not_block_websocket_event_loop(self):

@@ -21,6 +21,7 @@ The existing startup launcher may run the gateway instead of the final command. 
 - `DRISA_WHISPER_EXE` and `DRISA_WHISPER_MODEL` override the optional local Whisper fallback.
 - The gateway listens on `127.0.0.1:8765`; Tailscale Serve forwards the tailnet-only HTTPS name to loopback. It is not exposed on LAN interfaces.
 - WebSocket messages are capped at 8 MiB and decoded audio at 6 MiB. Audio must be valid base64 containing a RIFF/WAVE file with a matching declared length. Synchronous STT, LLM, and TTS calls run in worker threads so long inference does not block WebSocket keepalives.
+- The laptop microphone loop tries its configured local LLM even when Gemini CLI is not installed. If inference fails, it speaks a short retry prompt instead of repeating the transcript; exact model echoes are suppressed before TTS.
 - The Iku app authenticates before model management or replies. Add trusted `device_id` values to the runtime `allowlist` and configure their policies before enabling voice replies; the tracked defaults trust no devices.
 
 The gateway records voice content in the configured Obsidian vault and recordings folder, matching the existing Drisa policy. Use the Iku app to inspect model catalogs and load models; do not place model API keys in Git.

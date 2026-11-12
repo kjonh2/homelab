@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import websockets
-from drisa_speech_text import prepare_spoken_text
+from drisa_speech_text import is_utterance_echo, prepare_spoken_text
 
 BASE = Path(os.environ.get("DRISA_HOME", str(Path.home() / "workspace" / "drisa")))
 WHISPER_EXE = Path(os.environ.get("DRISA_WHISPER_EXE", r"C:\Whisper.Cpp\whisper-cli.exe"))
@@ -376,7 +376,11 @@ def llm_reply(text: str) -> str:
         r = requests.post(f"{cfg['llm_url']}/chat/completions", json=payload, headers=headers, timeout=90)
         r.raise_for_status()
         d = r.json()
-        return prepare_spoken_text(d["choices"][0]["message"]["content"])
+        reply = prepare_spoken_text(d["choices"][0]["message"]["content"])
+        if is_utterance_echo(text, reply):
+            print("[llm] resposta igual à transcrição ignorada")
+            return ""
+        return reply
     except Exception as e:
         print(f"[llm] erro: {e}")
         return ""

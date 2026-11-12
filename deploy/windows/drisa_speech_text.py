@@ -1,5 +1,6 @@
 import html
 import re
+import unicodedata
 
 
 def prepare_spoken_text(value: str) -> str:
@@ -18,3 +19,19 @@ def prepare_spoken_text(value: str) -> str:
     text = re.sub(r"[`*_~#]+", "", text)
     text = re.sub(r"\s+", " ", text)
     return text.strip()
+
+
+def is_utterance_echo(utterance: str, response: str) -> bool:
+    """Detect a model reply that only repeats a substantive user utterance."""
+
+    def normalized_words(value: str) -> list[str]:
+        normalized = unicodedata.normalize("NFKC", value or "").casefold()
+        return re.findall(r"\w+", normalized)
+
+    spoken_words = normalized_words(utterance)
+    reply_words = normalized_words(response)
+    if not spoken_words or spoken_words != reply_words:
+        return False
+
+    # Keep legitimate short acknowledgements such as "sim" or "olá" usable.
+    return len(spoken_words) >= 4 or sum(map(len, spoken_words)) >= 24
