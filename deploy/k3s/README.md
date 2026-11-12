@@ -130,6 +130,8 @@ The default `local-path` StorageClass stores each PVC on the node that first bin
 
 `backup.yaml` runs a daily Restic backup from the VPS to a private, append-only Rest Server on the homelab. The repository is encrypted by Restic; the local recovery folder is `C:\Users\kjonh\workspace\drisa\iku-backup-credentials`. Keep a separately protected copy of `restic-password`; without it, the repository cannot be restored. The server password and bcrypt `htpasswd` are also stored there. The backup client sends data over the K3s overlay network and the receiver has no public or tailnet Service.
 
+A second copy of the four recovery files is stored at `/home/kiko/iku-recovery-credentials` on the homelab. Its LUKS-encrypted root volume protects the files at rest; the directory is mode `0700` and each file is mode `0600`, owned by `kiko`. SHA-256 hashes match the laptop originals.
+
 Apply the manifest first to create the isolated namespace, then install/update the credentials and SQLite snapshot ConfigMap without writing secrets into Git:
 
 ```powershell
