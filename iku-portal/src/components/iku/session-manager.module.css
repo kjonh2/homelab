@@ -1,0 +1,55 @@
+.manager {
+  display: grid;
+  gap: 16px;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  color: #9997a9;
+  font-size: 12px;
+}
+
+.toolbar p {
+  margin: 0;
+}
+
+.list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 270px), 1fr));
+  gap: 13px;
+}
+
+.card {
+  display: grid;
+  align-content: start;
+  gap: 9px;
+}
+
+.card h2 {
+  margin: 3px 0;
+  font-size: 15px;
+}
+
+.card p {
+  margin: 0;
+}
+
+.meta {
+  color: #9997a9;
+  font-size: 11px;
+}
+
+.revoke {
+  justify-self: start;
+  margin-top: 6px;
+}
+
+@media (max-width: 540px) {
+  .toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

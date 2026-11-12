@@ -98,6 +98,10 @@ class LogoutInput(StrictModel):
     refresh_token: str | None = Field(default=None, min_length=32, max_length=512)
 
 
+class SessionRevokeInput(StrictModel):
+    session_id: str = Field(min_length=32, max_length=64, pattern="^[a-f0-9]+$")
+
+
 class FirebaseExchangeInput(StrictModel):
     id_token: str = Field(min_length=100, max_length=8192)
     totp_code: str | None = Field(default=None, min_length=6, max_length=16)
@@ -803,6 +807,79 @@ def session(request: Request) -> dict[str, Any]:
                 "expires_at": iso_time(session_row["expires_at"]),
             },
         }
+    finally:
+        db.close()
+
+
+@app.get("/v1/auth/sessions")
+def list_sessions(request: Request) -> dict[str, Any]:
+    db = connect()
+    try:
+        loaded = load_user_for_token(db, request)
+        if not loaded:
+            raise HTTPException(status_code=401, detail="not_authenticated")
+        current, _, _ = loaded
+        now = utc_now()
+        rows = db.execute(
+            "SELECT id,client,device_name,created_at,expires_at,last_seen_at FROM sessions "
+            "WHERE user_id=? AND revoked_at IS NULL AND expires_at>? "
+            "ORDER BY last_seen_at DESC LIMIT 50",
+            (current["user_id"], now),
+        ).fetchall()
+        return {
+            "sessions": [
+                {
+                    "id": row["id"], "client": row["client"], "device_name": row["device_name"],
+                    "created_at": iso_time(row["created_at"]), "expires_at": iso_time(row["expires_at"]),
+                    "last_seen_at": iso_time(row["last_seen_at"]), "current": row["id"] == current["id"],
+                }
+                for row in rows
+            ]
+        }
+    finally:
+        db.close()
+
+
+@app.post("/v1/auth/sessions/revoke")
+def revoke_session(body: SessionRevokeInput, request: Request, response: Response) -> dict[str, bool]:
+    is_browser_session = not request.headers.get("authorization", "").lower().startswith("bearer ")
+    verify_origin(request, required=is_browser_session)
+    db = connect()
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        loaded = load_user_for_token(db, request)
+        if not loaded:
+            raise HTTPException(status_code=401, detail="not_authenticated")
+        current, _, _ = loaded
+        target = db.execute(
+            "SELECT id,user_id,refresh_family,client FROM sessions WHERE id=? AND user_id=? "
+            "AND revoked_at IS NULL AND expires_at>?",
+            (body.session_id, current["user_id"], utc_now()),
+        ).fetchone()
+        if not target:
+            raise HTTPException(status_code=404, detail="session_not_found")
+        now = utc_now()
+        if target["refresh_family"]:
+            db.execute(
+                "UPDATE refresh_tokens SET revoked_at=? WHERE family_id=? AND revoked_at IS NULL",
+                (now, target["refresh_family"]),
+            )
+            db.execute(
+                "UPDATE sessions SET revoked_at=? WHERE refresh_family=? AND revoked_at IS NULL",
+                (now, target["refresh_family"]),
+            )
+        else:
+            db.execute("UPDATE sessions SET revoked_at=? WHERE id=? AND revoked_at IS NULL", (now, target["id"]))
+        audit(db, current["user_id"], "auth.session.revoke", "success", current["client"], request_ip(request))
+        db.commit()
+        is_current = target["id"] == current["id"]
+        if is_current and is_browser_session:
+            response.delete_cookie(SESSION_COOKIE, path="/", secure=True, httponly=True, samesite="strict")
+        return {"revoked": True, "current": is_current}
+    except Exception:
+        if db.in_transaction:
+            db.rollback()
+        raise
     finally:
         db.close()
 

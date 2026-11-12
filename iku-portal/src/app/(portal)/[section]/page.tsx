@@ -6,6 +6,7 @@ import { sectionBySlug } from "@/lib/portal-sections";
 import { getServiceStatus } from "@/lib/services";
 import { getAuthSession } from "@/lib/auth";
 import { redirect } from "next/navigation";
+import { SessionManager } from "@/components/iku/session-manager";
 
 export const dynamic = "force-dynamic";
 
@@ -49,6 +50,7 @@ export default async function SectionPage({ params }: { params: Promise<{ sectio
       sessions: { eyebrow: "SESSÃO ATUAL", title: "Sessões", icon: Activity, heading: current?.device_name || "Sessão do navegador", body: `Iniciada em ${current?.created_at ?? "indisponível"}. Expira em ${current?.expires_at ?? "indisponível"}. Só a sessão atual é apresentada; a API ainda não lista outras sessões.`, meta: `Cliente: ${current?.client ?? "indisponível"}` },
       security: { eyebrow: "PROTEÇÃO DA CONTA", title: "Segurança", icon: ShieldCheck, heading: user?.mfa_enabled ? "2FA ativo" : "2FA não ativo", body: "O login do portal usa sessão Iku protegida por cookie. O primeiro administrador requer 2FA; a gestão de fatores e tokens ainda não está disponível nesta página.", meta: "Acesso às páginas privadas limitado ao tailnet Tailscale." },
     }[slug];
+    if (slug === "sessions") return <div className="section-page"><PreviewNotice /><div className="page-heading"><div><span className="eyebrow muted-eyebrow">SESSÕES ATIVAS</span><h1>Sessões</h1><p>Consulta e termina os dispositivos com acesso à tua conta Iku.</p></div></div><SessionManager /></div>;
     const Icon = details.icon;
     return <div className="section-page"><PreviewNotice /><div className="page-heading"><div><span className="eyebrow muted-eyebrow">{details.eyebrow}</span><h1>{details.title}</h1><p>Informação fornecida pela sessão autenticada atual.</p></div></div><section className="empty-panel"><div className="empty-icon"><Icon size={22} /></div><div className="empty-copy"><h2>{details.heading}</h2><p>{details.body}</p><span className="pending-line"><KeyRound size={13} /> {details.meta}</span></div></section></div>;
   }

@@ -14,17 +14,18 @@ See [the current VPS capacity snapshot](../../docs/iku/iku-vps-capacity.md) for 
 
 The private portal at the VPS tailnet root checks Nextcloud, n8n, and LFM3 from inside the cluster and shows their current health on the home and Services pages. The app checks only unauthenticated health endpoints and does not read user files, workflows, or model prompts. Links require a device connected to the tailnet. The laptop Drisa gateway is marked as local because the VPS cannot verify its state.
 
-The health probe URLs can be overridden with `NEXTCLOUD_HEALTH_URL`, `N8N_HEALTH_URL`, and `LFM3_HEALTH_URL` on the portal Deployment. Probes time out after 2.5 seconds. The live VPS runs `iku-auth:0.1.3` and `iku-portal:0.1.4`; the portal image was built on the VPS, imported into K3s, and its rollout completed with one ready replica. Docker was stopped and remains disabled after the image import. The portal fails closed with `IKU_AUTH_ENFORCE=true`. The first administrator and TOTP bootstrap are complete; the Kubernetes bootstrap key and VPS bootstrap file have been removed. The portal displays health checks for Nextcloud, n8n, and LFM3; profile, current session, and 2FA state from the authenticated session; and enforces the admin role on the admin route. It does not yet list/revoke other devices or sessions, manage MFA factors/API tokens, or perform administrative actions. Service pages only check unauthenticated health endpoints.
+The health probe URLs can be overridden with `NEXTCLOUD_HEALTH_URL`, `N8N_HEALTH_URL`, and `LFM3_HEALTH_URL` on the portal Deployment. Probes time out after 2.5 seconds. The 0.1.5 portal and 0.1.4 auth manifests add per-account session listing and revocation. The API limits session results to the authenticated user, checks same-origin on browser revocation, revokes an Android refresh-token family with its session, and records an audit event. These candidate versions passed the auth API suite (13 tests) and Next.js production build; deployment is pending. The current live versions are `iku-auth:0.1.3` and `iku-portal:0.1.4`. The live portal fails closed with `IKU_AUTH_ENFORCE=true`. The first administrator and TOTP bootstrap are complete; the Kubernetes bootstrap key and VPS bootstrap file have been removed. The current portal displays health checks for Nextcloud, n8n, and LFM3; profile, current session, and 2FA state from the authenticated session; and enforces the admin role on the admin route. MFA-factor changes, API-token management, and broader administrative actions are not yet implemented. Service pages only check unauthenticated health endpoints.
 
 ### Local Iku Auth
 
 The service is a single-replica FastAPI/SQLite service with Argon2id password hashing, encrypted TOTP seeds, one-time bootstrap, revocable web sessions, rotating Android refresh tokens, login throttling, and audit events. Its ClusterIP is `iku-auth.iku.svc.cluster.local:8080`; the API has no public route or interactive documentation. SQLite lives on a VPS-local PVC and is not HA. Readiness and the unauthenticated session response were checked after deployment.
 
-Build and test from the repository root:
+Install development dependencies, run the API suite, and build the auth image from the repository root:
 
 ```powershell
+python -m pip install -r services/iku-auth/requirements-dev.txt
 python -m unittest discover -s services/iku-auth/tests -v
-docker build -t iku-auth:0.1.0 -f services/iku-auth/Dockerfile services/iku-auth
+docker build -t iku-auth:0.1.4 -f services/iku-auth/Dockerfile services/iku-auth
 ```
 
 Create a random 32-byte bootstrap token locally and keep it in a user-only file; transfer it to the VPS without printing it. On the VPS, create the encryption key and Kubernetes Secret:

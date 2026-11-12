@@ -160,6 +160,69 @@ class AuthServiceTests(unittest.TestCase):
         refresh = self.client.post("/v1/auth/refresh", json={"refresh_token": issued["refresh_token"]})
         self.assertEqual(refresh.status_code, 401)
 
+    def test_session_manager_lists_sessions_and_revokes_android_token_family(self) -> None:
+        self.enable_mfa()
+        self.next_totp_window()
+        web_login = self.login()
+        web_session_id = web_login.json()["session"]["id"]
+        self.next_totp_window()
+        android = self.login(client="android").json()
+
+        listed = self.client.get("/v1/auth/sessions")
+        self.assertEqual(listed.status_code, 200, listed.text)
+        records = listed.json()["sessions"]
+        self.assertEqual({item["id"] for item in records}, {web_session_id, android["session"]["id"]})
+        self.assertEqual([item["id"] for item in records if item["current"]], [web_session_id])
+
+        missing_origin = self.client.post("/v1/auth/sessions/revoke", json={"session_id": android["session"]["id"]})
+        self.assertEqual(missing_origin.status_code, 403)
+        still_active = self.client.get("/v1/auth/session", headers={"Authorization": f"Bearer {android['access_token']}"})
+        self.assertEqual(still_active.status_code, 200)
+
+        revoked = self.client.post(
+            "/v1/auth/sessions/revoke",
+            headers={"Origin": "https://portal.test"},
+            json={"session_id": android["session"]["id"]},
+        )
+        self.assertEqual(revoked.status_code, 200, revoked.text)
+        self.assertEqual(revoked.json(), {"revoked": True, "current": False})
+        self.assertEqual(self.client.get("/v1/auth/session", headers={"Authorization": f"Bearer {android['access_token']}"}).status_code, 401)
+        self.assertEqual(self.client.post("/v1/auth/refresh", json={"refresh_token": android["refresh_token"]}).status_code, 401)
+        remaining = self.client.get("/v1/auth/sessions").json()["sessions"]
+        self.assertEqual([item["id"] for item in remaining], [web_session_id])
+
+    def test_session_manager_cannot_revoke_another_users_session(self) -> None:
+        self.enable_mfa()
+        self.next_totp_window()
+        admin_login = self.login()
+        admin_session_id = admin_login.json()["session"]["id"]
+        now = main.utc_now()
+        other_user_id = "other-user"
+        db = main.connect()
+        try:
+            db.execute(
+                "INSERT INTO users(id,email,password_hash,created_at,updated_at) VALUES(?,?,?,?,?)",
+                (other_user_id, "other@example.test", main.hash_password("another secure test password"), now, now),
+            )
+            db.execute("INSERT INTO user_roles(user_id,role) VALUES(?,?)", (other_user_id, "user"))
+            user = db.execute("SELECT * FROM users WHERE id=?", (other_user_id,)).fetchone()
+            issued = main.issue_session(db, user, "web", "other-browser", "127.0.0.1")
+            db.commit()
+        finally:
+            db.close()
+        other_client = TestClient(main.app, base_url="https://portal.test")
+        other_client.cookies.set(main.SESSION_COOKIE, issued["_cookie_token"])
+        try:
+            response = other_client.post(
+                "/v1/auth/sessions/revoke",
+                headers={"Origin": "https://portal.test"},
+                json={"session_id": admin_session_id},
+            )
+            self.assertEqual(response.status_code, 404)
+            self.assertEqual(self.client.get("/v1/auth/session").status_code, 200)
+        finally:
+            other_client.close()
+
     def test_firebase_exchange_requires_admin_totp_and_issues_iku_tokens(self) -> None:
         self.enable_mfa()
         self.next_totp_window()
