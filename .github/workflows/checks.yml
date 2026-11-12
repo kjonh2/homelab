@@ -34,6 +34,7 @@ jobs:
         run: >-
           python -m pytest -q
           services/iku-auth/tests
+          deploy/windows/test_drisa_main.py
           deploy/windows/test_drisa_voice_gateway.py
           deploy/windows/test_drisa_speech_text.py
           deploy/windows/test_voice_loop_local.py
