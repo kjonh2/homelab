@@ -8,6 +8,7 @@ import { getAuthSession } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import { SessionManager } from "@/components/iku/session-manager";
 import { ApiTokenManager } from "@/components/iku/api-token-manager";
+import { AdminUserManager } from "@/components/iku/admin-user-manager";
 
 export const dynamic = "force-dynamic";
 
@@ -15,12 +16,6 @@ export default async function SectionPage({ params }: { params: Promise<{ sectio
   const { section: slug } = await params;
   const section = sectionBySlug[slug];
   if (!section) notFound();
-
-  if (slug === "admin" && process.env.IKU_AUTH_ENFORCE === "true") {
-    const session = await getAuthSession();
-    if (!session) redirect("/login");
-    if (!session.user.roles.includes("admin")) notFound();
-  }
 
   if (slug === "services") {
     const services = await getServiceStatus();
@@ -40,6 +35,12 @@ export default async function SectionPage({ params }: { params: Promise<{ sectio
   if (["profile", "devices", "sessions", "security", "settings", "admin"].includes(slug)) {
     try { session = await getAuthSession(); } catch { session = null; }
     if (process.env.IKU_AUTH_ENFORCE === "true" && !session) redirect("/login");
+  }
+
+  if (slug === "admin" && process.env.IKU_AUTH_ENFORCE === "true" && !session?.user.roles.includes("admin")) notFound();
+
+  if (slug === "admin") {
+    return <div className="section-page"><AdminUserManager currentUserId={session?.user.id ?? ""} /></div>;
   }
 
   if (slug === "devices") {

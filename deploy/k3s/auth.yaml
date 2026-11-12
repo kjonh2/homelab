@@ -47,7 +47,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: auth
-          image: iku-auth:0.1.6
+          image: iku-auth:0.1.7
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

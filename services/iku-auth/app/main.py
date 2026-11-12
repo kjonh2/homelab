@@ -115,6 +115,24 @@ class ApiTokenRevokeInput(StrictModel):
     token_id: str = Field(min_length=32, max_length=64, pattern="^[a-f0-9]+$")
 
 
+class AdminInviteCreateInput(StrictModel):
+    email: str = Field(min_length=3, max_length=254)
+
+
+class AdminInviteAcceptInput(StrictModel):
+    token: str = Field(min_length=32, max_length=512)
+    password: str = Field(min_length=12, max_length=1024)
+
+
+class AdminUserStatusInput(StrictModel):
+    user_id: str = Field(min_length=32, max_length=64, pattern="^[a-f0-9]+$")
+    disabled: bool
+
+
+class AdminInviteRevokeInput(StrictModel):
+    invite_id: str = Field(min_length=32, max_length=64, pattern="^[a-f0-9]+$")
+
+
 class FirebaseExchangeInput(StrictModel):
     id_token: str = Field(min_length=100, max_length=8192)
     totp_code: str | None = Field(default=None, min_length=6, max_length=16)
@@ -225,6 +243,18 @@ def init_db() -> None:
                 last_used_at INTEGER,
                 revoked_at INTEGER
             );
+            CREATE TABLE IF NOT EXISTS user_invites (
+                id TEXT PRIMARY KEY,
+                email TEXT NOT NULL COLLATE NOCASE,
+                roles_json TEXT NOT NULL,
+                token_hash TEXT NOT NULL UNIQUE,
+                created_by TEXT NOT NULL REFERENCES users(id),
+                created_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL,
+                accepted_at INTEGER,
+                revoked_at INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS user_invites_pending_idx ON user_invites(email, expires_at, accepted_at, revoked_at);
             CREATE TABLE IF NOT EXISTS audit_events (
                 id TEXT PRIMARY KEY,
                 user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
@@ -538,6 +568,21 @@ def require_scope(credential: sqlite3.Row, scope: str) -> None:
 def require_session_credential(credential: sqlite3.Row) -> None:
     if credential["credential_type"] != "session":
         raise HTTPException(status_code=403, detail="session_required")
+
+
+def require_admin_session(db: sqlite3.Connection, request: Request) -> sqlite3.Row:
+    loaded = load_user_for_token(db, request)
+    if not loaded:
+        raise HTTPException(status_code=401, detail="not_authenticated")
+    current, _, _ = loaded
+    require_session_credential(current)
+    roles = db.execute("SELECT role FROM user_roles WHERE user_id=?", (current["user_id"],)).fetchall()
+    if "admin" not in {row["role"] for row in roles}:
+        raise HTTPException(status_code=403, detail="admin_required")
+    factor = db.execute("SELECT enabled FROM mfa_factors WHERE user_id=?", (current["user_id"],)).fetchone()
+    if not factor or not factor["enabled"]:
+        raise HTTPException(status_code=403, detail="mfa_setup_required")
+    return current
 
 
 def issue_session(db: sqlite3.Connection, user: sqlite3.Row, client: str, device_name: str, ip: str) -> dict[str, Any]:
@@ -962,6 +1007,180 @@ def session(request: Request) -> dict[str, Any]:
                 "expires_at": iso_time(session_row["expires_at"]),
             },
         }
+    finally:
+        db.close()
+
+
+@app.get("/v1/auth/admin/users")
+def admin_list_users(request: Request) -> dict[str, Any]:
+    db = connect()
+    try:
+        current = require_admin_session(db, request)
+        users = db.execute(
+            "SELECT u.id,u.email,u.disabled,u.created_at,u.updated_at,m.enabled AS mfa_enabled "
+            "FROM users u LEFT JOIN mfa_factors m ON m.user_id=u.id ORDER BY u.created_at,u.email LIMIT 500"
+        ).fetchall()
+        roles_by_user: dict[str, list[str]] = {}
+        for row in db.execute("SELECT user_id,role FROM user_roles ORDER BY role").fetchall():
+            roles_by_user.setdefault(row["user_id"], []).append(row["role"])
+        invites = db.execute(
+            "SELECT id,email,roles_json,created_at,expires_at FROM user_invites "
+            "WHERE accepted_at IS NULL AND revoked_at IS NULL AND expires_at>? ORDER BY created_at DESC LIMIT 100",
+            (utc_now(),),
+        ).fetchall()
+        db.execute("UPDATE sessions SET last_seen_at=? WHERE id=?", (utc_now(), current["id"]))
+        db.commit()
+        return {
+            "users": [
+                {
+                    "id": row["id"], "email": row["email"], "disabled": bool(row["disabled"]),
+                    "roles": roles_by_user.get(row["id"], []), "mfa_enabled": bool(row["mfa_enabled"]),
+                    "created_at": iso_time(row["created_at"]), "updated_at": iso_time(row["updated_at"]),
+                }
+                for row in users
+            ],
+            "invites": [
+                {
+                    "id": row["id"], "email": row["email"], "roles": json.loads(row["roles_json"]),
+                    "created_at": iso_time(row["created_at"]), "expires_at": iso_time(row["expires_at"]),
+                }
+                for row in invites
+            ],
+        }
+    finally:
+        db.close()
+
+
+@app.post("/v1/auth/admin/invites")
+def admin_create_invite(body: AdminInviteCreateInput, request: Request) -> dict[str, Any]:
+    verify_origin(request, required=True)
+    email = normalize_email(body.email)
+    db = connect()
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        current = require_admin_session(db, request)
+        if db.execute("SELECT 1 FROM users WHERE email=? COLLATE NOCASE", (email,)).fetchone():
+            raise HTTPException(status_code=409, detail="user_already_exists")
+        now = utc_now()
+        db.execute(
+            "UPDATE user_invites SET revoked_at=? WHERE email=? COLLATE NOCASE AND accepted_at IS NULL AND revoked_at IS NULL",
+            (now, email),
+        )
+        invite_id = secrets.token_hex(16)
+        token = "iku_inv_" + secrets.token_urlsafe(32)
+        expires_at = now + 72 * 60 * 60
+        db.execute(
+            "INSERT INTO user_invites(id,email,roles_json,token_hash,created_by,created_at,expires_at) VALUES(?,?,?,?,?,?,?)",
+            (invite_id, email, json.dumps(["user"]), digest_token(token), current["user_id"], now, expires_at),
+        )
+        audit(db, current["user_id"], "auth.user_invite.create", "success", current["client"], request_ip(request))
+        db.commit()
+        return {
+            "invitation_token": token,
+            "invite": {"id": invite_id, "email": email, "roles": ["user"], "created_at": iso_time(now), "expires_at": iso_time(expires_at)},
+        }
+    except Exception:
+        if db.in_transaction:
+            db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+@app.post("/v1/auth/admin/invites/revoke")
+def admin_revoke_invite(body: AdminInviteRevokeInput, request: Request) -> dict[str, bool]:
+    verify_origin(request, required=True)
+    db = connect()
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        current = require_admin_session(db, request)
+        cursor = db.execute(
+            "UPDATE user_invites SET revoked_at=? WHERE id=? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at>?",
+            (utc_now(), body.invite_id, utc_now()),
+        )
+        if cursor.rowcount != 1:
+            raise HTTPException(status_code=404, detail="invite_not_found")
+        audit(db, current["user_id"], "auth.user_invite.revoke", "success", current["client"], request_ip(request))
+        db.commit()
+        return {"revoked": True}
+    except Exception:
+        if db.in_transaction:
+            db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+@app.post("/v1/auth/invites/accept")
+def accept_user_invite(body: AdminInviteAcceptInput, request: Request) -> dict[str, Any]:
+    verify_origin(request, required=True)
+    db = connect()
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        now = utc_now()
+        invite = db.execute(
+            "SELECT * FROM user_invites WHERE token_hash=? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at>?",
+            (digest_token(body.token), now),
+        ).fetchone()
+        if not invite:
+            raise HTTPException(status_code=400, detail="invite_invalid_or_expired")
+        if db.execute("SELECT 1 FROM users WHERE email=? COLLATE NOCASE", (invite["email"],)).fetchone():
+            raise HTTPException(status_code=409, detail="user_already_exists")
+        roles = json.loads(invite["roles_json"])
+        if not roles or not set(roles).issubset({"user"}):
+            raise HTTPException(status_code=400, detail="invite_invalid_or_expired")
+        user_id = secrets.token_hex(16)
+        db.execute(
+            "INSERT INTO users(id,email,password_hash,created_at,updated_at) VALUES(?,?,?,?,?)",
+            (user_id, invite["email"], hash_password(body.password), now, now),
+        )
+        db.executemany("INSERT INTO user_roles(user_id,role) VALUES(?,?)", [(user_id, role) for role in roles])
+        db.execute("UPDATE user_invites SET accepted_at=? WHERE id=?", (now, invite["id"]))
+        audit(db, user_id, "auth.user_invite.accept", "success", "web", request_ip(request))
+        db.commit()
+        return {"status": "account_created", "email": invite["email"]}
+    except Exception:
+        if db.in_transaction:
+            db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+@app.post("/v1/auth/admin/users/status")
+def admin_set_user_status(body: AdminUserStatusInput, request: Request) -> dict[str, Any]:
+    verify_origin(request, required=True)
+    db = connect()
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        current = require_admin_session(db, request)
+        target = db.execute("SELECT id,email,disabled FROM users WHERE id=?", (body.user_id,)).fetchone()
+        if not target:
+            raise HTTPException(status_code=404, detail="user_not_found")
+        if body.disabled and target["id"] == current["user_id"]:
+            raise HTTPException(status_code=409, detail="cannot_disable_current_admin")
+        target_roles = {row["role"] for row in db.execute("SELECT role FROM user_roles WHERE user_id=?", (body.user_id,)).fetchall()}
+        if body.disabled and "admin" in target_roles:
+            active_admins = db.execute(
+                "SELECT COUNT(DISTINCT u.id) FROM users u JOIN user_roles r ON r.user_id=u.id "
+                "WHERE r.role='admin' AND u.disabled=0"
+            ).fetchone()[0]
+            if active_admins <= 1:
+                raise HTTPException(status_code=409, detail="cannot_disable_last_admin")
+        now = utc_now()
+        db.execute("UPDATE users SET disabled=?,updated_at=? WHERE id=?", (int(body.disabled), now, body.user_id))
+        if body.disabled:
+            db.execute("UPDATE sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL", (now, body.user_id))
+            db.execute("UPDATE refresh_tokens SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL", (now, body.user_id))
+            db.execute("UPDATE api_tokens SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL", (now, body.user_id))
+        action = "auth.user.disable" if body.disabled else "auth.user.enable"
+        audit(db, current["user_id"], action, "success", current["client"], request_ip(request))
+        db.commit()
+        return {"user_id": body.user_id, "disabled": body.disabled}
+    except Exception:
+        if db.in_transaction:
+            db.rollback()
+        raise
     finally:
         db.close()
 

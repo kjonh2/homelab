@@ -18,6 +18,10 @@ The health probe URLs can be overridden with `NEXTCLOUD_HEALTH_URL`, `N8N_HEALTH
 
 ### Local Iku Auth
 
+#### Account administration (Auth 0.1.7 / Portal 0.1.8)
+
+The admin page and API require a browser session belonging to an MFA-enabled admin; API tokens and normal users receive 403. Admins can create a single-use invitation for a normal `user` account. It expires after 72 hours, is stored as a SHA-256 token hash, and is shown only once in the portal. The invited person enters the code and chooses a password at `/invite`; no public registration or invite token in URLs is enabled. Reissuing an invite for the same email revokes the previous invite. Admins can list pending invites and accounts, cancel invites, and disable or re-enable accounts. Disabling revokes all live sessions, Android refresh families and API tokens, and the API prevents the current admin from disabling themself or the final active admin. These changes create the additive `user_invites` table at service startup and do not alter existing account credentials. Normal users cannot assign roles or promote accounts to admin.
+
 The service is a single-replica FastAPI/SQLite service with Argon2id password hashing, encrypted TOTP seeds, one-time bootstrap, revocable web sessions, rotating Android refresh tokens, login throttling, and audit events. Its ClusterIP is `iku-auth.iku.svc.cluster.local:8080`; the API has no public route or interactive documentation. SQLite lives on a VPS-local PVC and is not HA. Readiness and the unauthenticated session response were checked after deployment.
 
 Install development dependencies, run the API suite, and build the auth image from the repository root:
@@ -25,7 +29,7 @@ Install development dependencies, run the API suite, and build the auth image fr
 ```powershell
 python -m pip install -r services/iku-auth/requirements-dev.txt
 python -m unittest discover -s services/iku-auth/tests -v
-docker build -t iku-auth:0.1.4 -f services/iku-auth/Dockerfile services/iku-auth
+docker build -t iku-auth:0.1.7 -f services/iku-auth/Dockerfile services/iku-auth
 ```
 
 Create a random 32-byte bootstrap token locally and keep it in a user-only file; transfer it to the VPS without printing it. On the VPS, create the encryption key and Kubernetes Secret:

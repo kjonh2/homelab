@@ -47,7 +47,7 @@ O cluster VPS atual é de nó único com armazenamento local. Por isso a base de
 
 ## Modelo de dados
 
-`users`, `roles`, `user_roles`, `mfa_factors`, `recovery_codes`, `sessions`, `refresh_tokens`, `firebase_identities`, `api_tokens`, `audit_events`, `login_attempts`.
+`users`, `roles`, `user_roles`, `mfa_factors`, `recovery_codes`, `sessions`, `refresh_tokens`, `firebase_identities`, `api_tokens`, `user_invites`, `audit_events`, `login_attempts`.
 
 Guardar timestamps UTC e IDs aleatórios. Aplicar chaves estrangeiras e índices para utilizador, sessão, dispositivo, expiração e hash do token. Eventos de auditoria registam resultado, ação, utilizador quando conhecido, dispositivo/IP e data, nunca segredos nem conteúdo de prompts.
 
@@ -62,6 +62,11 @@ Guardar timestamps UTC e IDs aleatórios. Aplicar chaves estrangeiras e índices
 | `POST /v1/auth/refresh` | Roda refresh token do Android e revoga a utilização anterior. |
 | `POST /v1/auth/firebase/exchange` | Verifica Firebase ID token, liga apenas email verificado já provisionado no Iku, exige TOTP do admin e emite sessão Android Iku. |
 | `POST /v1/auth/logout` | Revoga a sessão e limpa cookie/token. |
+| `GET /v1/auth/admin/users` | Admin MFA: lista contas e convites sem expor hashes ou segredos. |
+| `POST /v1/auth/admin/invites` | Admin MFA: cria convite de uso único para uma conta `user`, válido 72 horas. |
+| `POST /v1/auth/admin/invites/revoke` | Admin MFA: revoga um convite pendente. |
+| `POST /v1/auth/invites/accept` | Cria a conta convidada com a palavra-passe escolhida; roles não vêm do cliente. |
+| `POST /v1/auth/admin/users/status` | Admin MFA: desativa/reativa uma conta; desativar revoga sessões e tokens. |
 
 Respostas de autenticação usam mensagens genéricas para não revelar se um email existe. Requerer HTTPS e `Content-Type: application/json`; limitar corpos e tempos de resposta.
 
@@ -75,8 +80,8 @@ Rollout incremental:
 2. Instalar `iku-auth` com PVC e Secrets no VPS. **Concluído; backup Restic diário cifrado para o homelab instalado, integridade verificada e uma base SQLite restaurada com `PRAGMA integrity_check=ok`.**
 3. Ligar o portal, verificar a exigência de sessão e concluir o primeiro bootstrap. **Concluído; bootstrap e TOTP confirmados na base de dados da VPS.**
 4. Integrar Android com sessão Iku e Keystore; validar migração Google sem tratar Firebase claims como autorização. **Concluído; login Firebase trocado por sessão Android Iku após confirmação TOTP no Redmi, e a sessão ativa foi confirmada no servidor.**
-5. Colocar gateway à frente de cada app e só então ativar SSO, RBAC e administração.
+5. Colocar gateway à frente de cada app e só então ativar SSO e autorização partilhada. Administração local de utilizadores está implementada no portal; o gateway e SSO permanecem por ligar aos serviços externos.
 
 ## Trade-offs e limites
 
-SQLite reduz consumo e manutenção para o uso single-user atual, mas exige uma réplica e backups consistentes. Um IdP completo como Keycloak ofereceria fluxos OAuth/OIDC prontos, com maior consumo e operação. Reavaliar PostgreSQL/HA quando houver mais utilizadores, concorrência ou necessidade de sobreviver à falha da VPS. O login web, MFA TOTP do administrador, sessões Android, revogação de sessões e a ponte Firebase estão implementados. A página Dispositivos apresenta sessões ativas e permite revogá-las. Administração de utilizadores, tokens de API, gateway e SSO continuam por fazer; a retenção/pruning do repositório append-only e exercícios periódicos de recuperação continuam como tarefas operacionais.
+SQLite reduz consumo e manutenção para o uso single-user atual, mas exige uma réplica e backups consistentes. Um IdP completo como Keycloak ofereceria fluxos OAuth/OIDC prontos, com maior consumo e operação. Reavaliar PostgreSQL/HA quando houver mais utilizadores, concorrência ou necessidade de sobreviver à falha da VPS. O login web, MFA TOTP do administrador, sessões Android, revogação de sessões, administração de utilizadores, tokens de API e a ponte Firebase estão implementados. Convites só podem criar contas normais; promoção a admin continua restrita ao bootstrap/DB operacional. Gateway partilhado e SSO para serviços externos continuam por fazer.

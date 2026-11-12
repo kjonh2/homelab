@@ -86,6 +86,28 @@ class AuthServiceTests(unittest.TestCase):
     def next_totp_window(self) -> None:
         self.clock_offset += 30
 
+    def admin_login(self) -> None:
+        self.enable_mfa()
+        self.next_totp_window()
+        response = self.login()
+        self.assertEqual(response.status_code, 200, response.text)
+
+    def create_invited_user(self, email: str = "new-user@example.test") -> tuple[str, str]:
+        response = self.client.post(
+            "/v1/auth/admin/invites",
+            headers={"Origin": "https://portal.test"},
+            json={"email": email},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        invite = response.json()
+        accepted = self.client.post(
+            "/v1/auth/invites/accept",
+            headers={"Origin": "https://portal.test"},
+            json={"token": invite["invitation_token"], "password": "new user's strong password"},
+        )
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        return invite["invite"]["id"], invite["invitation_token"]
+
     def test_admin_bootstrap_requires_and_enables_totp_once(self) -> None:
         response = self.client.post("/v1/auth/bootstrap", headers={"Origin": "https://portal.test"}, json={
             "token": self.bootstrap_token,
@@ -286,6 +308,199 @@ class AuthServiceTests(unittest.TestCase):
         self.assertEqual(revoked.status_code, 200, revoked.text)
         self.assertEqual(self.client.get("/v1/auth/session", headers=headers).status_code, 401)
         self.assertEqual(self.client.get("/v1/auth/api-tokens").json()["tokens"], [])
+
+    def test_admin_invite_is_single_use_hash_only_and_creates_normal_user(self) -> None:
+        anonymous = self.client.get("/v1/auth/admin/users")
+        self.assertEqual(anonymous.status_code, 401)
+        self.admin_login()
+
+        missing_origin = self.client.post("/v1/auth/admin/invites", json={"email": "new-user@example.test"})
+        self.assertEqual(missing_origin.status_code, 403)
+        cannot_assign_admin = self.client.post(
+            "/v1/auth/admin/invites",
+            headers={"Origin": "https://portal.test"},
+            json={"email": "new-user@example.test", "roles": ["admin"]},
+        )
+        self.assertEqual(cannot_assign_admin.status_code, 422)
+        created = self.client.post(
+            "/v1/auth/admin/invites",
+            headers={"Origin": "https://portal.test"},
+            json={"email": "  New-User@example.test "},
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        payload = created.json()
+        token = payload["invitation_token"]
+        self.assertTrue(token.startswith("iku_inv_"))
+        self.assertEqual(payload["invite"]["roles"], ["user"])
+
+        db = main.connect()
+        try:
+            stored = db.execute("SELECT * FROM user_invites WHERE id=?", (payload["invite"]["id"],)).fetchone()
+            self.assertEqual(stored["token_hash"], main.digest_token(token))
+            self.assertNotEqual(stored["token_hash"], token)
+        finally:
+            db.close()
+
+        listed = self.client.get("/v1/auth/admin/users")
+        self.assertEqual(listed.status_code, 200, listed.text)
+        self.assertEqual(listed.json()["invites"][0]["email"], "new-user@example.test")
+        self.assertNotIn("token_hash", listed.text)
+        self.assertNotIn(token, listed.text)
+        self.assertNotIn("password_hash", listed.text)
+
+        accepted = self.client.post(
+            "/v1/auth/invites/accept",
+            headers={"Origin": "https://portal.test"},
+            json={"token": token, "password": "new user's strong password"},
+        )
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        self.assertEqual(accepted.json(), {"status": "account_created", "email": "new-user@example.test"})
+        replay = self.client.post(
+            "/v1/auth/invites/accept",
+            headers={"Origin": "https://portal.test"},
+            json={"token": token, "password": "another strong password"},
+        )
+        self.assertEqual(replay.status_code, 400)
+        login = self.client.post("/v1/auth/login", headers={"Origin": "https://portal.test"}, json={
+            "email": "new-user@example.test", "password": "new user's strong password", "client": "web",
+        })
+        self.assertEqual(login.status_code, 200, login.text)
+        self.assertEqual(login.json()["user"]["roles"], ["user"])
+
+    def test_reissuing_or_revoking_invite_invalidates_its_token(self) -> None:
+        self.admin_login()
+        first = self.client.post(
+            "/v1/auth/admin/invites", headers={"Origin": "https://portal.test"},
+            json={"email": "invited@example.test"},
+        ).json()
+        second = self.client.post(
+            "/v1/auth/admin/invites", headers={"Origin": "https://portal.test"},
+            json={"email": "INVITED@example.test"},
+        )
+        self.assertEqual(second.status_code, 200, second.text)
+        self.assertNotEqual(first["invite"]["id"], second.json()["invite"]["id"])
+
+        stale = self.client.post(
+            "/v1/auth/invites/accept", headers={"Origin": "https://portal.test"},
+            json={"token": first["invitation_token"], "password": "new user's strong password"},
+        )
+        self.assertEqual(stale.status_code, 400)
+        revoked = self.client.post(
+            "/v1/auth/admin/invites/revoke", headers={"Origin": "https://portal.test"},
+            json={"invite_id": second.json()["invite"]["id"]},
+        )
+        self.assertEqual(revoked.status_code, 200, revoked.text)
+        after_revoke = self.client.post(
+            "/v1/auth/invites/accept", headers={"Origin": "https://portal.test"},
+            json={"token": second.json()["invitation_token"], "password": "new user's strong password"},
+        )
+        self.assertEqual(after_revoke.status_code, 400)
+
+    def test_invitation_expires_after_72_hours(self) -> None:
+        self.admin_login()
+        created = self.client.post(
+            "/v1/auth/admin/invites", headers={"Origin": "https://portal.test"},
+            json={"email": "expires@example.test"},
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        self.assertEqual(
+            int(datetime.fromisoformat(created.json()["invite"]["expires_at"]).timestamp())
+            - int(datetime.fromisoformat(created.json()["invite"]["created_at"]).timestamp()),
+            72 * 60 * 60,
+        )
+        self.clock_offset += 73 * 60 * 60
+        expired = self.client.post(
+            "/v1/auth/invites/accept", headers={"Origin": "https://portal.test"},
+            json={"token": created.json()["invitation_token"], "password": "new user's strong password"},
+        )
+        self.assertEqual(expired.status_code, 400)
+
+    def test_admin_api_requires_admin_session_not_api_token_or_regular_user(self) -> None:
+        self.admin_login()
+        token = self.client.post(
+            "/v1/auth/api-tokens",
+            headers={"Origin": "https://portal.test"},
+            json={"name": "profile reader", "scopes": ["profile:read"], "expires_in_days": 30},
+        ).json()["token"]
+        denied_token = self.client.get("/v1/auth/admin/users", headers={"Authorization": f"Bearer {token}"})
+        self.assertEqual(denied_token.status_code, 403)
+
+        self.create_invited_user()
+        user_login = self.client.post("/v1/auth/login", headers={"Origin": "https://portal.test"}, json={
+            "email": "new-user@example.test", "password": "new user's strong password", "client": "web",
+        })
+        self.assertEqual(user_login.status_code, 200, user_login.text)
+        user_client = TestClient(main.app, base_url="https://portal.test")
+        user_client.cookies.set(main.SESSION_COOKIE, user_login.cookies.get(main.SESSION_COOKIE))
+        try:
+            denied = user_client.get("/v1/auth/admin/users")
+            self.assertEqual(denied.status_code, 403)
+            denied_create = user_client.post(
+                "/v1/auth/admin/invites", headers={"Origin": "https://portal.test"},
+                json={"email": "forbidden@example.test"},
+            )
+            self.assertEqual(denied_create.status_code, 403)
+        finally:
+            user_client.close()
+
+    def test_disabling_user_revokes_sessions_and_reenabling_allows_login(self) -> None:
+        self.admin_login()
+        self.create_invited_user()
+        user_login = self.client.post("/v1/auth/login", headers={"Origin": "https://portal.test"}, json={
+            "email": "new-user@example.test", "password": "new user's strong password", "client": "android",
+        })
+        self.assertEqual(user_login.status_code, 200, user_login.text)
+        credentials = user_login.json()
+        api_token = "iku_" + "a" * 32
+        db = main.connect()
+        try:
+            user_id = db.execute("SELECT id FROM users WHERE email='new-user@example.test'").fetchone()["id"]
+            db.execute(
+                "INSERT INTO api_tokens(id,user_id,name,token_prefix,token_hash,scopes_json,created_at,expires_at) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                ("b" * 32, user_id, "test token", api_token[:12], main.digest_token(api_token), '["profile:read"]', main.utc_now(), main.utc_now() + 3600),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        db = main.connect()
+        try:
+            admin_id = db.execute("SELECT id FROM users WHERE email='admin@example.test'").fetchone()["id"]
+        finally:
+            db.close()
+        self_disable = self.client.post(
+            "/v1/auth/admin/users/status", headers={"Origin": "https://portal.test"},
+            json={"user_id": admin_id, "disabled": True},
+        )
+        self.assertEqual(self_disable.status_code, 409)
+        db = main.connect()
+        try:
+            target = db.execute("SELECT id FROM users WHERE email='new-user@example.test'").fetchone()
+        finally:
+            db.close()
+        disabled = self.client.post(
+            "/v1/auth/admin/users/status", headers={"Origin": "https://portal.test"},
+            json={"user_id": target["id"], "disabled": True},
+        )
+        self.assertEqual(disabled.status_code, 200, disabled.text)
+        self.assertEqual(self.client.get("/v1/auth/session", headers={"Authorization": f"Bearer {credentials['access_token']}"}).status_code, 401)
+        self.assertEqual(self.client.post("/v1/auth/refresh", json={"refresh_token": credentials["refresh_token"]}).status_code, 401)
+        self.assertEqual(self.client.get("/v1/auth/session", headers={"Authorization": f"Bearer {api_token}"}).status_code, 401)
+        locked_login = self.client.post("/v1/auth/login", headers={"Origin": "https://portal.test"}, json={
+            "email": "new-user@example.test", "password": "new user's strong password", "client": "web",
+        })
+        self.assertEqual(locked_login.status_code, 401)
+
+        enabled = self.client.post(
+            "/v1/auth/admin/users/status", headers={"Origin": "https://portal.test"},
+            json={"user_id": target["id"], "disabled": False},
+        )
+        self.assertEqual(enabled.status_code, 200, enabled.text)
+        active_login = self.client.post("/v1/auth/login", headers={"Origin": "https://portal.test"}, json={
+            "email": "new-user@example.test", "password": "new user's strong password", "client": "web",
+        })
+        self.assertEqual(active_login.status_code, 200, active_login.text)
 
     def test_api_tokens_reject_unknown_scopes_and_cannot_manage_tokens(self) -> None:
         self.enable_mfa()

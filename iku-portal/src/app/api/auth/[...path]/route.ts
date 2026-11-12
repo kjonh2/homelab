@@ -6,6 +6,7 @@ const routes = new Map<string, string>([
   ["GET session", "session"],
   ["GET sessions", "sessions"],
   ["GET api-tokens", "api-tokens"],
+  ["GET admin/users", "admin/users"],
   ["POST bootstrap", "bootstrap"],
   ["POST bootstrap/verify-mfa", "bootstrap/verify-mfa"],
   ["POST firebase/exchange", "firebase/exchange"],
@@ -15,6 +16,10 @@ const routes = new Map<string, string>([
   ["POST sessions/revoke", "sessions/revoke"],
   ["POST api-tokens", "api-tokens"],
   ["POST api-tokens/revoke", "api-tokens/revoke"],
+  ["POST admin/invites", "admin/invites"],
+  ["POST admin/invites/revoke", "admin/invites/revoke"],
+  ["POST admin/users/status", "admin/users/status"],
+  ["POST invites/accept", "invites/accept"],
 ]);
 
 function sessionCookie(request: NextRequest): string | undefined {
