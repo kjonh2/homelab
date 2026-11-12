@@ -107,7 +107,7 @@ Install the APK built from `android/` with `gradlew.bat :app:assembleModernDebug
 
 ## Laptop Gaming mode
 
-The Drisa mode switch lives at `C:\Users\kjonh\workspace\drisa\drisa_mode.ps1`. The gaming environment configuration is versioned at [`deploy/windows/drisa_remote_config.ps1`](../../deploy/windows/drisa_remote_config.ps1) and copied to `workspace/drisa` so the launcher can dot-source it. The shared speech sanitizer is [`deploy/windows/drisa_speech_text.py`](../../deploy/windows/drisa_speech_text.py); its tests run with `python -m unittest discover -s deploy/windows -p 'test_*.py'` from the repository root:
+The Drisa mode switch is versioned at [`deploy/windows/drisa_mode.ps1`](../../deploy/windows/drisa_mode.ps1), with gaming environment settings in [`deploy/windows/drisa_remote_config.ps1`](../../deploy/windows/drisa_remote_config.ps1). Copy both files into `%USERPROFILE%\workspace\drisa`; the launcher dot-sources the runtime copy of the remote configuration. The shared speech sanitizer is [`deploy/windows/drisa_speech_text.py`](../../deploy/windows/drisa_speech_text.py); its tests run with `python -m unittest discover -s deploy/windows -p 'test_*.py'` from the repository root:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File C:\Users\kjonh\workspace\drisa\drisa_mode.ps1 gaming

@@ -23,3 +23,7 @@ The existing startup launcher may run the gateway instead of the final command. 
 - The Iku app authenticates before model management or replies. Add trusted `device_id` values to the runtime `allowlist` and configure their policies before enabling voice replies; the tracked defaults trust no devices.
 
 The gateway records voice content in the configured Obsidian vault and recordings folder, matching the existing Drisa policy. Use the Iku app to inspect model catalogs and load models; do not place model API keys in Git.
+
+## Gaming mode
+
+Copy `drisa_mode.ps1` and `drisa_remote_config.ps1` into `%USERPROFILE%\workspace\drisa`. Run `powershell -ExecutionPolicy Bypass -File $env:USERPROFILE\workspace\drisa\drisa_mode.ps1 gaming` to stop local model serving and the 3D world while keeping the gateway and microphone listener available; language-model requests go to the private VPS endpoint. Use `normal` to restore local serving and the 3D world.
