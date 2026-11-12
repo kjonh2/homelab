@@ -51,8 +51,11 @@ $configMap = @{
 } | ConvertTo-Json -Depth 8 -Compress
 
 function Get-TunnelToken {
-    if (-not $TunnelTokenFile) { throw 'Pass -TunnelTokenFile with the existing Cloudflare Tunnel connector token.' }
-    $resolvedTokenPath = (Resolve-Path -LiteralPath $TunnelTokenFile -ErrorAction Stop).Path
+    $tokenPath = $TunnelTokenFile
+    if ([string]::IsNullOrWhiteSpace($tokenPath)) {
+        $tokenPath = Join-Path $env:USERPROFILE 'workspace\drisa\cloudflare_tunnel_token_vps.txt'
+    }
+    $resolvedTokenPath = (Resolve-Path -LiteralPath $tokenPath -ErrorAction Stop).Path
     return ([System.IO.File]::ReadAllText($resolvedTokenPath, [System.Text.Encoding]::UTF8)).Trim()
 }
 
@@ -140,6 +143,9 @@ if ($BuildOnly) {
     return
 }
 
+$tunnelToken = Get-TunnelToken
+if ([string]::IsNullOrWhiteSpace($tunnelToken)) { throw 'The Cloudflare Tunnel token file is empty.' }
+
 $workDir = Join-Path ([System.IO.Path]::GetTempPath()) ('iku-public-site-' + [guid]::NewGuid().ToString('N'))
 [System.IO.Directory]::CreateDirectory($workDir) | Out-Null
 $configMapPath = Join-Path $workDir 'configmap.json'
@@ -155,8 +161,6 @@ function Invoke-RemoteKubectlApply {
 
 try {
     Invoke-RemoteKubectlApply -ManifestPath $configMapPath
-    $tunnelToken = Get-TunnelToken
-    if ([string]::IsNullOrWhiteSpace($tunnelToken)) { throw 'The Cloudflared tunnel token is empty.' }
     $secretJson = @{
         apiVersion = 'v1'
         kind = 'Secret'
@@ -172,11 +176,12 @@ try {
         data = @{ token = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($tunnelToken)) }
     } | ConvertTo-Json -Depth 8 -Compress
     Invoke-RemoteKubectlApplyText -Content $secretJson
-    Remove-Variable tunnelToken,secretJson -ErrorAction SilentlyContinue
+    Remove-Variable secretJson -ErrorAction SilentlyContinue
     Invoke-RemoteKubectlApply -ManifestPath $deploymentPath
     $verifyCommand = "sudo -n k3s kubectl -n iku rollout status deployment/iku-public-site --timeout=180s && pod_ip=`$(sudo -n k3s kubectl -n iku get pod -l app.kubernetes.io/name=iku-public-site -o jsonpath='{.items[0].status.podIP}') && curl -fsS -H 'Host: iknowu.org' http://`$pod_ip:80/ | head -c 200"
     & $tailscaleExe ssh $VpsHost $verifyCommand
     if ($LASTEXITCODE -ne 0) { throw "VPS rollout or loopback HTTP verification failed with exit code $LASTEXITCODE." }
 } finally {
+    Remove-Variable tunnelToken,secretJson -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue
 }
