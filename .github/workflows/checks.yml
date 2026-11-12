@@ -59,3 +59,6 @@ jobs:
       - name: Build public landing page
         working-directory: public-site
         run: npm ci && npm run build
+
+      - name: Verify Cloudflare preview assets are current
+        run: git diff --exit-code -- public-site/dist
