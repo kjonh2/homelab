@@ -95,7 +95,7 @@ def _summarize(messages, base_url, key, model, n_ctx):
     # Preserve newest complete turns, aiming at 30% including the next user message and reply reserve.
     for i in range(len(turns) - 2, -1, -2):
         pair = turns[i:i + 2]
-        trial = [system] + ([{"role": "system", "name": "drisa_memory_summary", "content": summary}] if summary else []) + pair + [{"role": "assistant", "content": ""}]
+        trial = [system] + ([{"role": "system", "name": "drisa_memory_summary", "content": summary}] if summary else []) + pair + keep + [{"role": "assistant", "content": ""}]
         try:
             count, _ = _render_and_count(base_url, key, model, trial)
         except Exception:
@@ -106,7 +106,7 @@ def _summarize(messages, base_url, key, model, n_ctx):
             break
     old = turns[:len(turns) - len(keep)] if keep else turns
     if not old:
-        return messages, summary, False
+        return messages, summary, False, 0
     # Incremental chunks stay under half of the model context including summary instruction/output.
     compacted = summary
     chunks, chunk = [], []
@@ -138,7 +138,14 @@ def _summarize(messages, base_url, key, model, n_ctx):
         out.append({"role": "system", "name": "drisa_memory_summary", "content": compacted})
     out.extend(keep)
     out.append(pending_user)
-    return out, compacted, True
+    return out, compacted, True, len(old)
+
+
+def _summary_cursor(rows, summarized_count: int, current_cursor: int) -> int:
+    """Return the last persisted message included in the new summary."""
+    if summarized_count < 0 or summarized_count > len(rows):
+        raise ValueError("Resumo excede as mensagens persistidas")
+    return rows[summarized_count - 1][0] if summarized_count else current_cursor
 
 
 def chat(user_text: str, *, system_prompt: str, base_url: str, key: str, model: str,
@@ -158,6 +165,7 @@ def chat(user_text: str, *, system_prompt: str, base_url: str, key: str, model: 
         # Serialize both laptop and Android turns for this shared conversation.
         conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (conversation_id,))
         row = conn.execute("SELECT summary_ciphertext, summarized_through FROM drisa_conversations WHERE conversation_id=%s", (conversation_id,)).fetchone()
+        summarized_through = row[1] if row else 0
         summary = cipher.decrypt(bytes(row[0])).decode("utf-8") if row and row[0] else ""
         rows = conn.execute("SELECT id, role, content_ciphertext FROM drisa_messages WHERE conversation_id=%s AND id>%s ORDER BY id", (conversation_id, row[1] if row else 0)).fetchall()
         history = [{"role": "system", "content": system_prompt}]
@@ -169,11 +177,14 @@ def chat(user_text: str, *, system_prompt: str, base_url: str, key: str, model: 
         try:
             tokens, n_ctx = _render_and_count(base_url, key, model, messages)
             if tokens + max_tokens >= n_ctx * CONTEXT_TRIGGER:
-                messages, summary, changed = _summarize(messages, base_url, key, model, n_ctx)
+                messages, summary, changed, summarized_count = _summarize(messages, base_url, key, model, n_ctx)
                 tokens, _ = _render_and_count(base_url, key, model, messages)
                 logger.info("context compacted: %s/%s tokens (%.1f%%)", tokens + max_tokens, n_ctx, 100 * (tokens + max_tokens) / n_ctx)
                 if changed:
-                    last_id = rows[-1][0] if rows else 0
+                    # Only advance across the archived prefix included in the summary.
+                    # Newer complete turns retained in the prompt must be loaded again
+                    # on the next request instead of silently disappearing from context.
+                    last_id = _summary_cursor(rows, summarized_count, summarized_through)
                     conn.execute("UPDATE drisa_conversations SET summary_ciphertext=%s, summarized_through=%s, updated_at=now() WHERE conversation_id=%s", (cipher.encrypt(summary.encode()), last_id, conversation_id))
         except Exception as exc:
             # With a live DB, fail closed on inability to measure: never send unbounded history.
