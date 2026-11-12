@@ -64,6 +64,7 @@ spec:
         runAsNonRoot: true
         runAsUser: 10001
         runAsGroup: 10001
+        fsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -90,14 +91,9 @@ spec:
             - "1"
             - --n-gpu-layers
             - "0"
-            - --api-key
-            - $(LLAMA_API_KEY)
+            - --api-key-file
+            - /run/secrets/llama/api-key
           env:
-            - name: LLAMA_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: lfm3-api
-                  key: LLAMA_API_KEY
             - name: HOME
               value: /tmp
           ports:
@@ -144,6 +140,9 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+            - name: api-key
+              mountPath: /run/secrets/llama
+              readOnly: true
       volumes:
         - name: model-cache
           persistentVolumeClaim:
@@ -151,6 +150,13 @@ spec:
         - name: tmp
           emptyDir:
             sizeLimit: 512Mi
+        - name: api-key
+          secret:
+            secretName: lfm3-api
+            defaultMode: 0440
+            items:
+              - key: LLAMA_API_KEY
+                path: api-key
 ---
 apiVersion: v1
 kind: Service
