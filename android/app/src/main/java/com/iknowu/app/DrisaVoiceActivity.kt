@@ -141,7 +141,7 @@ class DrisaVoiceActivity : AppCompatActivity() {
         root.addView(label("Modelos da Drisa"))
         root.addView(label("Onde carregar"))
         modelHostPicker = Spinner(this).apply {
-            adapter = spinnerAdapter(listOf("Portátil", "VPS"))
+            adapter = spinnerAdapter(listOf("Portátil", "VPS", "Homelab"))
         }
         root.addView(modelHostPicker, matchWrap())
         root.addView(label("Categoria"))
@@ -368,7 +368,11 @@ class DrisaVoiceActivity : AppCompatActivity() {
         items
     ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
 
-    private fun currentModelHost() = if (modelHostPicker.selectedItemPosition == 1) "vps" else "pc"
+    private fun currentModelHost() = when (modelHostPicker.selectedItemPosition) {
+        1 -> "vps"
+        2 -> "homelab"
+        else -> "pc"
+    }
     private fun currentModelCategory() = when (modelCategoryPicker.selectedItemPosition) {
         1 -> "stt"
         2 -> "tts"

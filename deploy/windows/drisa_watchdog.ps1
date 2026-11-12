@@ -21,14 +21,17 @@ function Set-DrisaRuntimeEnvironment([bool]$GamingMode) {
     $env:DRISA_HOME = $drisaDir
     $env:DRISA_VAULT_PATH = Join-Path $env:USERPROFILE 'Documents\Obsidian Vault\Drisa\Voice Gateway'
     $env:DRISA_UNSLOTH_URL = if ($config.unsloth_url) { $config.unsloth_url } else { 'http://127.0.0.1:8888/v1' }
+    $env:DRISA_AUDIO_URL = if ($config.audio_url) { $config.audio_url } else { 'http://127.0.0.1:8766/v1' }
     $env:DRISA_STT_ENGINE = if ($config.stt_engine) { $config.stt_engine } else { 'api' }
     $env:DRISA_TTS_ENGINE = if ($config.tts_engine) { $config.tts_engine } else { 'api' }
     $env:DRISA_STT_MODEL = if ($config.stt_model) { $config.stt_model } else { 'audio-cpp/audio.cpp-gguf/MOSS-Transcribe-Diarize-GGUF' }
     $env:DRISA_STT_FALLBACK_MODEL = if ($config.fallback_stt_model) { $config.fallback_stt_model } else { 'audio-cpp/audio.cpp-gguf/Parakeet-TDT-0.6B-v3-GGUF' }
+    $env:DRISA_STT_URL = if ($config.stt_url) { $config.stt_url } elseif ($config.stt_host -eq 'homelab') { $env:DRISA_AUDIO_URL } else { $env:DRISA_UNSLOTH_URL }
     $env:DRISA_LLM_MODEL = if ($config.llm_model) { $config.llm_model } else { 'AtomicChat/LFM3-1.7B-Uncensored-GGUF' }
     $env:DRISA_LLM_HOST = if ($config.llm_host) { $config.llm_host } else { 'pc' }
     if ($config.llm_url) { $env:DRISA_LLM_URL = $config.llm_url }
     $env:DRISA_TTS_MODEL = if ($config.tts_model) { $config.tts_model } else { 'audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF' }
+    $env:DRISA_TTS_URL = if ($config.tts_url) { $config.tts_url } elseif ($config.tts_host -eq 'homelab') { $env:DRISA_AUDIO_URL } else { $env:DRISA_UNSLOTH_URL }
     $env:DRISA_TTS_VOICE = if ($config.tts_voice) { $config.tts_voice } else { 'pf_dora' }
 
     $keyPath = Join-Path $drisaDir 'unsloth.key'
@@ -43,6 +46,47 @@ function Set-DrisaRuntimeEnvironment([bool]$GamingMode) {
 function Write-DrisaWatchdogLog([string]$Message) {
     $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
     "[$timestamp] Watchdog: $Message" | Out-File -FilePath $logFile -Encoding utf8 -Append
+}
+
+function Ensure-DrisaAudioTunnel {
+    $listenAddress = '127.0.0.1'
+    $listenPort = 8766
+    $forward = '127.0.0.1:8766:10.43.200.200:8080'
+    $sshTarget = 'kiko@100.72.114.73'
+    $sshExe = Join-Path $env:SystemRoot 'System32\OpenSSH\ssh.exe'
+    if (-not (Test-Path -LiteralPath $sshExe)) {
+        Write-DrisaWatchdogLog 'audio tunnel skipped: Windows OpenSSH client not found'
+        return
+    }
+
+    $matching = @(Get-CimInstance Win32_Process -Filter "Name = 'ssh.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { ([string]$_.CommandLine).Contains($forward) -and ([string]$_.CommandLine).Contains($sshTarget) })
+    $listener = Get-NetTCPConnection -State Listen -LocalAddress $listenAddress -LocalPort $listenPort -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($listener -and @($matching | Where-Object { $_.ProcessId -eq $listener.OwningProcess }).Count -gt 0) { return }
+    if ($listener) {
+        Write-DrisaWatchdogLog "audio tunnel skipped: $listenAddress`:$listenPort is owned by another process"
+        return
+    }
+    if ($matching.Count -gt 0) { return }
+
+    try {
+        $started = Start-Process -FilePath $sshExe -ArgumentList @(
+            '-N', '-o', 'ExitOnForwardFailure=yes', '-o', 'BatchMode=yes',
+            '-o', 'ServerAliveInterval=30', '-o', 'ServerAliveCountMax=3',
+            '-L', $forward, $sshTarget
+        ) -WindowStyle Hidden -PassThru
+        Start-Sleep -Milliseconds 800
+        $listener = Get-NetTCPConnection -State Listen -LocalAddress $listenAddress -LocalPort $listenPort -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if ($listener -and $listener.OwningProcess -eq $started.Id) {
+            Write-DrisaWatchdogLog "audio tunnel active pid=$($started.Id) on $listenAddress`:$listenPort"
+        } else {
+            Write-DrisaWatchdogLog "audio tunnel failed to start (ssh pid=$($started.Id), exit=$($started.ExitCode))"
+        }
+    } catch {
+        Write-DrisaWatchdogLog "audio tunnel error: $($_.Exception.Message)"
+    }
 }
 
 function Get-DrisaProcesses([string]$ScriptPath) {
@@ -97,6 +141,10 @@ try {
         if (Get-Command Stop-DrisaGamingWorld -ErrorAction SilentlyContinue) {
             Stop-DrisaGamingWorld
         }
+    }
+
+    if ($gamingMode -or $env:DRISA_STT_URL -eq $env:DRISA_AUDIO_URL -or $env:DRISA_TTS_URL -eq $env:DRISA_AUDIO_URL) {
+        Ensure-DrisaAudioTunnel
     }
 
     Ensure-DrisaProcess $gatewayScript $gatewayPidFile 'gateway'

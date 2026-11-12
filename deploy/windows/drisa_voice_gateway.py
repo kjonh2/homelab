@@ -98,6 +98,12 @@ def _unsloth_cfg():
     return {
         "base_url": os.environ.get("DRISA_UNSLOTH_URL", cfg.get("unsloth_url", "http://127.0.0.1:8888/v1")).rstrip("/"),
         "key": os.environ.get("DRISA_UNSLOTH_KEY", cfg.get("unsloth_key", "")).strip(),
+        "audio_url": os.environ.get("DRISA_AUDIO_URL", cfg.get("audio_url", "")).strip().rstrip("/"),
+        "audio_key": os.environ.get("DRISA_AUDIO_KEY", cfg.get("audio_key", "")).strip(),
+        "stt_url": os.environ.get("DRISA_STT_URL", cfg.get("stt_url", "")).strip().rstrip("/"),
+        "tts_url": os.environ.get("DRISA_TTS_URL", cfg.get("tts_url", "")).strip().rstrip("/"),
+        "stt_key": os.environ.get("DRISA_STT_KEY", cfg.get("stt_key", "")).strip(),
+        "tts_key": os.environ.get("DRISA_TTS_KEY", cfg.get("tts_key", "")).strip(),
         "llm_host": llm_host,
         "llm_url": llm_url,
         "llm_key": llm_key,
@@ -110,6 +116,13 @@ def _unsloth_cfg():
 
 
 _MODEL_CONFIG_LOCK = threading.Lock()
+_AUDIO_REQUEST_LOCK = threading.RLock()
+_HOMELAB_ACTIVE_MODEL: str | None = None
+_HOMELAB_MODEL_PACKAGES = {
+    "moss": {"package_id": "moss_transcribe_diarize_q4_k", "task": "asr"},
+    "parakeet": {"package_id": "parakeet_tdt_q8_0", "task": "asr"},
+    "kokoro": {"package_id": "kokoro_82m_q8_0", "task": "tts"},
+}
 _VPS_LLM_URL = "https://vps-4e5174e4.tail2931da.ts.net:8445/v1"
 _VPS_MODELS_URL = "https://vps-4e5174e4.tail2931da.ts.net:8445/models"
 
@@ -195,12 +208,43 @@ def _vps_model_catalog(category: str) -> dict:
     return {"models": models, "selected": _selected_model(load_config(), "vps", category), "message": ""}
 
 
+def _homelab_model_catalog(category: str) -> dict:
+    global _HOMELAB_ACTIVE_MODEL
+    if category == "llm":
+        return {"models": [], "selected": "", "message": "O homelab serve áudio; os modelos de texto estão no portátil ou na VPS."}
+    allowed = {"stt": {"moss", "parakeet"}, "tts": {"kokoro"}}
+    if category not in allowed:
+        raise ValueError("Categoria de modelo inválida.")
+    import requests
+    cfg = _unsloth_cfg()
+    base_url = cfg["audio_url"] or cfg["stt_url"] or cfg["tts_url"]
+    if not base_url:
+        raise RuntimeError("O endereço do serviço de áudio do homelab não está configurado.")
+    headers = {"Authorization": f"Bearer {cfg['audio_key']}"} if cfg["audio_key"] else {}
+    response = requests.get(f"{base_url}/models", headers=headers, timeout=(5, 15))
+    response.raise_for_status()
+    payload = response.json()
+    entries = payload.get("data", payload.get("models", []))
+    entry_by_id = {str(item.get("id", "")): item for item in entries if isinstance(item, dict)}
+    available = set(entry_by_id)
+    configured = sorted(allowed[category] & available)
+    with _AUDIO_REQUEST_LOCK:
+        loaded_model = _HOMELAB_ACTIVE_MODEL
+    models = [{"id": model_id, "loaded": (
+        bool(entry_by_id[model_id]["loaded"]) if isinstance(entry_by_id[model_id].get("loaded"), bool)
+        else model_id == loaded_model
+    )} for model_id in configured]
+    return {"models": models, "selected": _selected_model(load_config(), "homelab", category), "message": ""}
+
+
 def _selected_model(cfg: dict, host: str, category: str) -> str:
     if category == "llm":
         if cfg.get("llm_host", "pc") != host:
             return ""
         return str(cfg.get("llm_model", ""))
-    if host != "pc":
+    if host not in ("pc", "homelab"):
+        return ""
+    if cfg.get(f"{category}_host", "pc") != host:
         return ""
     return str(cfg.get({"stt": "stt_model", "tts": "tts_model"}.get(category, ""), ""))
 
@@ -212,6 +256,8 @@ def model_catalog(host: str, category: str) -> dict:
         return _pc_model_catalog(category)
     if host == "vps":
         return _vps_model_catalog(category)
+    if host == "homelab":
+        return _homelab_model_catalog(category)
     raise ValueError("Host desconhecido.")
 
 
@@ -227,10 +273,32 @@ def _save_model_selection(host: str, category: str, model_id: str) -> None:
             os.environ["DRISA_LLM_URL"] = cfg["llm_url"]
         elif category == "stt" and host == "pc":
             cfg["stt_model"] = model_id
+            cfg["stt_host"] = "pc"
+            cfg["stt_url"] = os.environ.get("DRISA_UNSLOTH_URL", cfg.get("unsloth_url", "http://127.0.0.1:8888/v1")).rstrip("/")
             os.environ["DRISA_STT_MODEL"] = model_id
+            os.environ["DRISA_STT_URL"] = cfg["stt_url"]
         elif category == "tts" and host == "pc":
             cfg["tts_model"] = model_id
+            cfg["tts_host"] = "pc"
+            cfg["tts_url"] = os.environ.get("DRISA_UNSLOTH_URL", cfg.get("unsloth_url", "http://127.0.0.1:8888/v1")).rstrip("/")
             os.environ["DRISA_TTS_MODEL"] = model_id
+            os.environ["DRISA_TTS_URL"] = cfg["tts_url"]
+        elif category == "stt" and host == "homelab":
+            previous_model = str(cfg.get("stt_model", ""))
+            if model_id != previous_model and cfg.get("fallback_stt_model") == model_id:
+                cfg["fallback_stt_model"] = previous_model
+                os.environ["DRISA_STT_FALLBACK_MODEL"] = previous_model
+            cfg["stt_model"] = model_id
+            cfg["stt_host"] = "homelab"
+            cfg["stt_url"] = os.environ.get("DRISA_AUDIO_URL", cfg.get("audio_url", "http://127.0.0.1:8766/v1")).rstrip("/")
+            os.environ["DRISA_STT_MODEL"] = model_id
+            os.environ["DRISA_STT_URL"] = cfg["stt_url"]
+        elif category == "tts" and host == "homelab":
+            cfg["tts_model"] = model_id
+            cfg["tts_host"] = "homelab"
+            cfg["tts_url"] = os.environ.get("DRISA_AUDIO_URL", cfg.get("audio_url", "http://127.0.0.1:8766/v1")).rstrip("/")
+            os.environ["DRISA_TTS_MODEL"] = model_id
+            os.environ["DRISA_TTS_URL"] = cfg["tts_url"]
         else:
             raise ValueError("Esta categoria não pode ser carregada nesse host.")
         temp_path = CONFIG_PATH.with_suffix(".json.tmp")
@@ -263,6 +331,28 @@ def load_model_for_app(host: str, category: str, model_id: str) -> str:
             raise RuntimeError("A VPS recusou o carregamento do modelo.")
         _save_model_selection(host, category, model_id)
         return "Modelo carregado na VPS."
+    if host == "homelab" and category in ("stt", "tts"):
+        package = _HOMELAB_MODEL_PACKAGES.get(model_id)
+        if not package or model_id not in {item["id"] for item in catalog["models"]}:
+            raise ValueError("Este modelo não está instalado no homelab.")
+        import requests
+        cfg = _unsloth_cfg()
+        base_url = cfg["audio_url"] or cfg["stt_url"] or cfg["tts_url"]
+        headers = {"Content-Type": "application/json"}
+        if cfg["audio_key"]:
+            headers["Authorization"] = f"Bearer {cfg['audio_key']}"
+        with _AUDIO_REQUEST_LOCK:
+            response = requests.post(f"{base_url}/models/load",
+                                     json={"id": model_id, **package},
+                                     headers=headers, timeout=(5, 260))
+            response.raise_for_status()
+            result = response.json()
+            if result.get("success") is False or result.get("error"):
+                raise RuntimeError(str(result.get("error") or "O servidor de áudio recusou o modelo."))
+            _save_model_selection(host, category, model_id)
+            global _HOMELAB_ACTIVE_MODEL
+            _HOMELAB_ACTIVE_MODEL = model_id
+        return f"Modelo {model_id} carregado no homelab."
     raise ValueError("Esta categoria não pode ser carregada nesse host.")
 
 
@@ -300,15 +390,53 @@ def _auth_headers():
     return headers
 
 
+def _ensure_homelab_model(requests, base_url: str, headers: dict, model_id: str) -> None:
+    """Load a configured homelab audio model before sending inference to it."""
+    package = _HOMELAB_MODEL_PACKAGES.get(model_id)
+    if not package:
+        raise ValueError(f"Modelo de áudio do homelab desconhecido: {model_id}")
+    response = requests.get(f"{base_url}/models", headers=headers, timeout=(5, 15))
+    response.raise_for_status()
+    payload = response.json()
+    entries = payload.get("data", payload.get("models", []))
+    model = next((item for item in entries if isinstance(item, dict) and item.get("id") == model_id), None)
+    if not model:
+        raise RuntimeError(f"O modelo {model_id} não está configurado no homelab.")
+    if model.get("loaded") is True:
+        return
+    load_response = requests.post(
+        f"{base_url}/models/load",
+        json={"id": model_id, **package},
+        headers={**headers, "Content-Type": "application/json"},
+        timeout=(5, 120),
+    )
+    load_response.raise_for_status()
+    loaded = load_response.json()
+    if loaded.get("success") is False or loaded.get("error"):
+        raise RuntimeError(str(loaded.get("error") or f"Não foi possível carregar {model_id}."))
+
+
 def unsloth_transcribe(wav_path: Path, model: str | None = None) -> str:
     """STT via Unsloth OpenAI-compatible endpoint."""
     try:
         import requests
         cfg = _unsloth_cfg()
+        base_url = cfg["stt_url"] or cfg["audio_url"] or cfg["base_url"]
+        key = cfg["stt_key"] or (cfg["audio_key"] if base_url == cfg["audio_url"] else cfg["key"])
         files = {"file": (wav_path.name, wav_path.read_bytes(), "audio/wav")}
         data = {"model": model or cfg["stt_model"]}
-        r = requests.post(f"{cfg['base_url']}/audio/transcriptions", headers={k: v for k, v in _auth_headers().items() if k != "Content-Type"}, files=files, data=data, timeout=120)
-        r.raise_for_status()
+        headers = {"Authorization": f"Bearer {key}"} if key else {}
+        with _AUDIO_REQUEST_LOCK:
+            is_homelab = bool(cfg["audio_url"]) and base_url == cfg["audio_url"]
+            if is_homelab:
+                _ensure_homelab_model(requests, base_url, headers, data["model"])
+            inference_timeout = 30 if is_homelab and data["model"] == "moss" else 120
+            r = requests.post(f"{base_url}/audio/transcriptions", headers=headers, files=files, data=data,
+                              timeout=(5, inference_timeout))
+            r.raise_for_status()
+            if is_homelab:
+                global _HOMELAB_ACTIVE_MODEL
+                _HOMELAB_ACTIVE_MODEL = data["model"]
         payload = r.json()
         return (payload.get("text") or "").strip()
     except Exception as e:
@@ -430,12 +558,21 @@ def tts_kokoro(text: str) -> bytes | None:
                             pass
         import requests
         cfg = _unsloth_cfg()
+        base_url = cfg["tts_url"] or cfg["audio_url"] or cfg["base_url"]
+        key = cfg["tts_key"] or (cfg["audio_key"] if base_url == cfg["audio_url"] else cfg["key"])
         payload = {"model": cfg["tts_model"], "input": text, "voice": cfg["tts_voice"], "response_format": "wav"}
         headers = {"Content-Type": "application/json"}
-        if cfg["key"]:
-            headers["Authorization"] = f"Bearer {cfg['key']}"
-        r = requests.post(f"{cfg['base_url']}/audio/speech", json=payload, headers=headers, timeout=120)
-        r.raise_for_status()
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+        with _AUDIO_REQUEST_LOCK:
+            is_homelab = bool(cfg["audio_url"]) and base_url == cfg["audio_url"]
+            if is_homelab:
+                _ensure_homelab_model(requests, base_url, headers, payload["model"])
+            r = requests.post(f"{base_url}/audio/speech", json=payload, headers=headers, timeout=(5, 120))
+            r.raise_for_status()
+            if is_homelab:
+                global _HOMELAB_ACTIVE_MODEL
+                _HOMELAB_ACTIVE_MODEL = payload["model"]
         return r.content
     except Exception as e:
         print(f"[tts] erro: {e}")
@@ -474,13 +611,14 @@ def deepgram_transcribe(wav_path: Path) -> str:
 def transcribe(wav_path: Path) -> str:
     """Motor principal de STT (Unsloth API por defeito)."""
     cfg = load_config()
+    api_cfg = _unsloth_cfg()
     engine = os.environ.get("DRISA_STT_ENGINE", cfg.get("stt_engine", "api")).strip().lower()
     text = ""
     if engine in ("api", "unsloth"):
-        text = unsloth_transcribe(wav_path, cfg["stt_model"])
-        if not text and cfg["fallback_stt_model"] != cfg["stt_model"]:
-            print(f"[stt] modelo principal sem resultado; a tentar {cfg['fallback_stt_model']}")
-            text = unsloth_transcribe(wav_path, cfg["fallback_stt_model"])
+        text = unsloth_transcribe(wav_path, api_cfg["stt_model"])
+        if not text and api_cfg["fallback_stt_model"] != api_cfg["stt_model"]:
+            print(f"[stt] modelo principal sem resultado; a tentar {api_cfg['fallback_stt_model']}")
+            text = unsloth_transcribe(wav_path, api_cfg["fallback_stt_model"])
         if not text and cfg.get("fallback_local_stt", False):
             text = whisper_transcribe(wav_path)
     elif engine == "deepgram":

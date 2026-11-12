@@ -15,6 +15,119 @@ import requests
 
 
 class VoiceLoopTests(unittest.TestCase):
+    def test_gaming_stt_uses_dedicated_audio_endpoint_and_selected_model(self):
+        class ModelsResponse:
+            @staticmethod
+            def raise_for_status():
+                return None
+
+            @staticmethod
+            def json():
+                return {"data": [{"id": "moss", "loaded": True}]}
+
+        class FakeResponse:
+            @staticmethod
+            def raise_for_status():
+                return None
+
+            @staticmethod
+            def json():
+                return {"text": "Olá Kiko."}
+
+        old_url, old_model = voice.STT_URL, voice.STT_MODEL
+        voice.STT_URL, voice.STT_MODEL = "http://127.0.0.1:8766/v1", "moss"
+        try:
+            with tempfile.TemporaryDirectory(prefix="drisa-gaming-stt-test-") as directory:
+                wav_path = Path(directory) / "input.wav"
+                wav_path.write_bytes(b"RIFF-test")
+                with (
+                    patch.object(voice.requests, "get", return_value=ModelsResponse()),
+                    patch.object(voice.requests, "post", return_value=FakeResponse()) as post,
+                ):
+                    transcript, _ = voice.stt_unsloth(str(wav_path))
+            self.assertEqual(transcript, "Olá Kiko.")
+            self.assertEqual(post.call_args.args[0], "http://127.0.0.1:8766/v1/audio/transcriptions")
+            self.assertEqual(post.call_args.kwargs["data"]["model"], "moss")
+        finally:
+            voice.STT_URL, voice.STT_MODEL = old_url, old_model
+
+    def test_gaming_stt_loads_unloaded_fallback_model(self):
+        class ModelsResponse:
+            @staticmethod
+            def raise_for_status():
+                return None
+
+            @staticmethod
+            def json():
+                return {"data": [{"id": "parakeet", "loaded": False}]}
+
+        class LoadResponse:
+            @staticmethod
+            def raise_for_status():
+                return None
+
+            @staticmethod
+            def json():
+                return {"id": "parakeet", "loaded": True}
+
+        class TranscriptionResponse(LoadResponse):
+            @staticmethod
+            def json():
+                return {"text": "Teste do Parakeet."}
+
+        old_url = voice.STT_URL
+        voice.STT_URL = "http://127.0.0.1:8766/v1"
+        try:
+            with tempfile.TemporaryDirectory(prefix="drisa-gaming-stt-test-") as directory:
+                wav_path = Path(directory) / "input.wav"
+                wav_path.write_bytes(b"RIFF-test")
+                with (
+                    patch.object(voice.requests, "get", return_value=ModelsResponse()),
+                    patch.object(voice.requests, "post", side_effect=[LoadResponse(), TranscriptionResponse()]) as post,
+                ):
+                    transcript, _ = voice.stt_unsloth(str(wav_path), "parakeet")
+            self.assertEqual(transcript, "Teste do Parakeet.")
+            self.assertEqual(post.call_args_list[0].args[0], "http://127.0.0.1:8766/v1/models/load")
+            self.assertEqual(post.call_args_list[0].kwargs["json"], {
+                "id": "parakeet", "package_id": "parakeet_tdt_q8_0", "task": "asr",
+            })
+            self.assertEqual(post.call_args_list[1].args[0], "http://127.0.0.1:8766/v1/audio/transcriptions")
+        finally:
+            voice.STT_URL = old_url
+
+    def test_gaming_tts_uses_dedicated_audio_endpoint_and_kokoro(self):
+        class ModelsResponse:
+            @staticmethod
+            def raise_for_status():
+                return None
+
+            @staticmethod
+            def json():
+                return {"data": [{"id": "kokoro", "loaded": True}]}
+
+        class FakeResponse:
+            content = b"RIFF-test"
+
+            @staticmethod
+            def raise_for_status():
+                return None
+
+        old_url, old_model = voice.TTS_URL, voice.TTS_MODEL
+        voice.TTS_URL, voice.TTS_MODEL = "http://127.0.0.1:8766/v1", "kokoro"
+        try:
+            with tempfile.TemporaryDirectory(prefix="drisa-gaming-tts-test-") as directory:
+                with (
+                    patch.object(voice.requests, "get", return_value=ModelsResponse()),
+                    patch.object(voice.requests, "post", return_value=FakeResponse()) as post,
+                    patch.object(voice.tempfile, "gettempdir", return_value=directory),
+                ):
+                    output = voice.tts_kokoro("Sistema pronto.")
+                    self.assertEqual(Path(output).read_bytes(), b"RIFF-test")
+                self.assertEqual(post.call_args.args[0], "http://127.0.0.1:8766/v1/audio/speech")
+                self.assertEqual(post.call_args.kwargs["json"]["model"], "kokoro")
+        finally:
+            voice.TTS_URL, voice.TTS_MODEL = old_url, old_model
+
     def test_pipeline_lock_is_released_after_success(self):
         lock = threading.Lock()
         lock.acquire()

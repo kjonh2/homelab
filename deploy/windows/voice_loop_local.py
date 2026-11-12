@@ -29,6 +29,15 @@ if not KEY:
     except OSError:
         KEY = ""
 BASE_URL = os.environ.get("DRISA_UNSLOTH_URL", "http://localhost:8888/v1").rstrip("/")
+AUDIO_URL = os.environ.get("DRISA_AUDIO_URL", "http://127.0.0.1:8766/v1").rstrip("/")
+STT_URL = os.environ.get("DRISA_STT_URL", AUDIO_URL).rstrip("/")
+TTS_URL = os.environ.get("DRISA_TTS_URL", AUDIO_URL).rstrip("/")
+AUDIO_KEY = os.environ.get("DRISA_AUDIO_KEY", "").strip()
+_AUDIO_MODELS = {
+    "moss": {"package_id": "moss_transcribe_diarize_q4_k", "task": "asr"},
+    "parakeet": {"package_id": "parakeet_tdt_q8_0", "task": "asr"},
+    "kokoro": {"package_id": "kokoro_82m_q8_0", "task": "tts"},
+}
 _remote_llm_url = os.environ.get("DRISA_LLM_URL", "").strip()
 LLM_URL = (_remote_llm_url or BASE_URL).rstrip("/")
 LLM_KEY = os.environ.get("DRISA_LLM_KEY", "").strip()
@@ -119,6 +128,25 @@ if os.environ.get("DRISA_STT_ENGINE", "api").strip().lower() in ("local", "whisp
 else:
     STATE["local"]["stt_engine"] = "MOSS + Parakeet"
 _lock = threading.Lock()
+_audio_request_lock = threading.RLock()
+
+def ensure_audio_model(api_url, model, headers):
+    if api_url.rstrip("/") != AUDIO_URL or model not in _AUDIO_MODELS:
+        return
+    response = requests.get(f"{api_url}/models", headers=headers, timeout=(5, 15))
+    response.raise_for_status()
+    models = response.json().get("data", [])
+    current = next((item for item in models if item.get("id") == model), None)
+    if not current:
+        raise RuntimeError(f"Modelo {model} não encontrado no homelab.")
+    if current.get("loaded") is True:
+        return
+    response = requests.post(f"{api_url}/models/load", headers={**headers, "Content-Type": "application/json"},
+                             json={"id": model, **_AUDIO_MODELS[model]}, timeout=(5, 120))
+    response.raise_for_status()
+    result = response.json()
+    if result.get("success") is False or result.get("error"):
+        raise RuntimeError(str(result.get("error") or f"Falha ao carregar {model}."))
 
 NON_SPEECH = ("[MÚSICA]", "[MUSIC]", "[MUSICA]", "[APLAUSO]", "[APPLAUSE]", "[RISADA]",
               "[LAUGHTER]", "[SILÊNCIO]", "[SILENCE]", "[RUÍDO]", "[NOISE]",
@@ -138,15 +166,20 @@ def stt_whisper_cpp(wav_path):
 def stt_unsloth(wav_path, model=None):
     t0 = time.time()
     headers = {}
-    if KEY:
-        headers["Authorization"] = f"Bearer {KEY}"
+    if AUDIO_KEY:
+        headers["Authorization"] = f"Bearer {AUDIO_KEY}"
     with open(wav_path, "rb") as f:
         data = f.read()
     files = {"file": (os.path.basename(wav_path), data, "audio/wav")}
-    r = requests.post(f"{BASE_URL}/audio/transcriptions", headers=headers, files=files, data={"model": model or STT_MODEL}, timeout=120)
-    r.raise_for_status()
+    selected_model = model or STT_MODEL
+    with _audio_request_lock:
+        ensure_audio_model(STT_URL, selected_model, headers)
+        timeout = (5, 30 if STT_URL == AUDIO_URL and selected_model == "moss" else 120)
+        r = requests.post(f"{STT_URL}/audio/transcriptions", headers=headers, files=files,
+                          data={"model": selected_model}, timeout=timeout)
+        r.raise_for_status()
     txt = (r.json().get("text") or "").strip()
-    log(f"STT unsloth {time.time()-t0:.1f}s -> {txt!r}")
+    log(f"STT audio service {time.time()-t0:.1f}s -> {txt!r}")
     return txt, time.time()-t0
 def llm(texto):
     t0 = time.time()
@@ -166,13 +199,15 @@ def llm(texto):
 def tts_kokoro(texto):
     t0 = time.time()
     headers = {"Content-Type": "application/json"}
-    if KEY:
-        headers["Authorization"] = f"Bearer {KEY}"
-    r = requests.post(f"{BASE_URL}/audio/speech",
-        headers=headers,
-        json={"model": TTS_MODEL, "input": texto, "voice": TTS_VOICE, "response_format": "wav"},
-        timeout=180)
-    r.raise_for_status()
+    if AUDIO_KEY:
+        headers["Authorization"] = f"Bearer {AUDIO_KEY}"
+    with _audio_request_lock:
+        ensure_audio_model(TTS_URL, TTS_MODEL, headers)
+        r = requests.post(f"{TTS_URL}/audio/speech",
+            headers=headers,
+            json={"model": TTS_MODEL, "input": texto, "voice": TTS_VOICE, "response_format": "wav"},
+            timeout=(5, 120))
+        r.raise_for_status()
     tmp = os.path.join(tempfile.gettempdir(), "drisa_tts_local.wav")
     with open(tmp, "wb") as f:
         f.write(r.content)

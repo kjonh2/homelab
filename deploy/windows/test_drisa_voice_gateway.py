@@ -99,6 +99,168 @@ class AudioPayloadTests(unittest.TestCase):
         self.assertEqual(kwargs["json"]["model"], "lfm3-uncensored")
         self.assertEqual(kwargs["json"]["messages"][-1], {"role": "user", "content": transcript})
 
+    def test_homelab_catalog_reports_audio_models_and_active_model(self):
+        import requests
+
+        class FakeResponse:
+            @staticmethod
+            def raise_for_status():
+                return None
+
+            @staticmethod
+            def json():
+                return {"data": [{"id": "moss"}, {"id": "parakeet"}, {"id": "kokoro"}]}
+
+        old_active = gateway._HOMELAB_ACTIVE_MODEL
+        try:
+            gateway._HOMELAB_ACTIVE_MODEL = "moss"
+            with (
+                patch.object(gateway, "_unsloth_cfg", return_value={"audio_url": "http://127.0.0.1:8766/v1", "stt_url": "", "tts_url": "", "audio_key": ""}),
+                patch.object(gateway, "load_config", return_value={"stt_host": "homelab", "stt_model": "moss"}),
+                patch.object(requests, "get", return_value=FakeResponse()) as get,
+            ):
+                result = gateway.model_catalog("homelab", "stt")
+            self.assertEqual(get.call_args.args[0], "http://127.0.0.1:8766/v1/models")
+            self.assertEqual(result["selected"], "moss")
+            self.assertEqual(result["models"], [{"id": "moss", "loaded": True}, {"id": "parakeet", "loaded": False}])
+        finally:
+            gateway._HOMELAB_ACTIVE_MODEL = old_active
+
+    def test_homelab_model_load_uses_installed_package(self):
+        import requests
+
+        class ModelsResponse:
+            @staticmethod
+            def raise_for_status():
+                return None
+
+            @staticmethod
+            def json():
+                return {"data": [{"id": "moss"}, {"id": "parakeet"}, {"id": "kokoro"}]}
+
+        class LoadResponse(ModelsResponse):
+            @staticmethod
+            def json():
+                return {"id": "moss", "loaded": True}
+
+        with (
+            patch.object(gateway, "_unsloth_cfg", return_value={"audio_url": "http://127.0.0.1:8766/v1", "stt_url": "", "tts_url": "", "audio_key": ""}),
+            patch.object(requests, "get", return_value=ModelsResponse()),
+            patch.object(requests, "post", return_value=LoadResponse()) as post,
+        ):
+            message = gateway.load_model_for_app("homelab", "stt", "moss")
+        self.assertEqual(post.call_args.args[0], "http://127.0.0.1:8766/v1/models/load")
+        self.assertEqual(post.call_args.kwargs["json"], {"id": "moss", "package_id": "moss_transcribe_diarize_q4_k", "task": "asr"})
+        self.assertEqual(gateway._HOMELAB_ACTIVE_MODEL, "moss")
+        self.assertEqual(gateway.load_config()["stt_host"], "homelab")
+
+    def test_audio_inference_uses_audio_url_separate_from_llm_url(self):
+        import requests
+
+        class FakeResponse:
+            content = b"RIFF-wave"
+
+            @staticmethod
+            def raise_for_status():
+                return None
+
+            @staticmethod
+            def json():
+                return {"text": "Olá Kiko."}
+
+        class ModelsResponse:
+            @staticmethod
+            def raise_for_status():
+                return None
+
+            @staticmethod
+            def json():
+                return {"data": [
+                    {"id": "moss", "loaded": True},
+                    {"id": "parakeet", "loaded": True},
+                    {"id": "kokoro", "loaded": True},
+                ]}
+
+        cfg = {
+            "base_url": "http://127.0.0.1:8888/v1", "key": "unsloth-key",
+            "audio_url": "http://127.0.0.1:8766/v1", "audio_key": "",
+            "stt_url": "http://127.0.0.1:8766/v1", "tts_url": "http://127.0.0.1:8766/v1",
+            "stt_key": "", "tts_key": "", "stt_model": "moss", "fallback_stt_model": "parakeet",
+            "tts_model": "kokoro", "tts_voice": "pf_dora",
+        }
+        with tempfile.TemporaryDirectory(prefix="drisa-audio-api-test-") as directory:
+            wav = Path(directory) / "input.wav"
+            wav.write_bytes(b"RIFF-test")
+            with (
+                patch.object(gateway, "_unsloth_cfg", return_value=cfg),
+                patch.object(requests, "get", return_value=ModelsResponse()),
+                patch.object(requests, "post", side_effect=[FakeResponse(), FakeResponse()]) as post,
+            ):
+                self.assertEqual(gateway.unsloth_transcribe(wav, "moss"), "Olá Kiko.")
+                self.assertEqual(gateway.tts_kokoro("Olá."), b"RIFF-wave")
+        self.assertEqual(post.call_args_list[0].args[0], "http://127.0.0.1:8766/v1/audio/transcriptions")
+        self.assertEqual(post.call_args_list[0].kwargs["data"]["model"], "moss")
+        self.assertEqual(post.call_args_list[1].args[0], "http://127.0.0.1:8766/v1/audio/speech")
+        self.assertEqual(post.call_args_list[1].kwargs["json"]["model"], "kokoro")
+
+    def test_homelab_stt_loads_model_before_transcription(self):
+        import requests
+
+        class ModelsResponse:
+            @staticmethod
+            def raise_for_status():
+                return None
+
+            @staticmethod
+            def json():
+                return {"data": [{"id": "parakeet", "loaded": False}]}
+
+        class LoadResponse:
+            @staticmethod
+            def raise_for_status():
+                return None
+
+            @staticmethod
+            def json():
+                return {"id": "parakeet", "loaded": True}
+
+        class TranscriptionResponse(LoadResponse):
+            @staticmethod
+            def json():
+                return {"text": "Teste de fallback."}
+
+        cfg = {
+            "base_url": "http://127.0.0.1:8888/v1", "key": "",
+            "audio_url": "http://127.0.0.1:8766/v1", "audio_key": "",
+            "stt_url": "http://127.0.0.1:8766/v1", "tts_url": "",
+            "stt_key": "", "tts_key": "", "stt_model": "moss",
+            "fallback_stt_model": "parakeet", "tts_model": "kokoro", "tts_voice": "pf_dora",
+        }
+        with tempfile.TemporaryDirectory(prefix="drisa-audio-api-test-") as directory:
+            wav = Path(directory) / "input.wav"
+            wav.write_bytes(b"RIFF-test")
+            with (
+                patch.object(gateway, "_unsloth_cfg", return_value=cfg),
+                patch.object(requests, "get", return_value=ModelsResponse()),
+                patch.object(requests, "post", side_effect=[LoadResponse(), TranscriptionResponse()]) as post,
+            ):
+                self.assertEqual(gateway.unsloth_transcribe(wav, "parakeet"), "Teste de fallback.")
+        self.assertEqual(post.call_args_list[0].args[0], "http://127.0.0.1:8766/v1/models/load")
+        self.assertEqual(post.call_args_list[0].kwargs["json"], {
+            "id": "parakeet", "package_id": "parakeet_tdt_q8_0", "task": "asr",
+        })
+        self.assertEqual(post.call_args_list[1].args[0], "http://127.0.0.1:8766/v1/audio/transcriptions")
+
+    def test_stt_falls_back_from_moss_to_parakeet(self):
+        cfg = {"stt_model": "moss", "fallback_stt_model": "parakeet"}
+        with (
+            patch.object(gateway, "load_config", return_value={"stt_engine": "api", "fallback_local_stt": False}),
+            patch.object(gateway, "_unsloth_cfg", return_value=cfg),
+            patch.object(gateway, "unsloth_transcribe", side_effect=["", "Texto reconhecido."]) as transcribe,
+        ):
+            self.assertEqual(gateway.transcribe(Path("unused.wav")), "Texto reconhecido.")
+        self.assertEqual([call.args[1] for call in transcribe.call_args_list], ["moss", "parakeet"])
+
 
 class GatewayAsyncAudioTests(unittest.IsolatedAsyncioTestCase):
     async def test_slow_inference_does_not_block_websocket_event_loop(self):
