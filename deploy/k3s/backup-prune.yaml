@@ -9,7 +9,7 @@ metadata:
 spec:
   schedule: "17 9 * * 0"
   timeZone: Europe/Paris
-  suspend: true
+  suspend: false
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 1800
   successfulJobsHistoryLimit: 2
