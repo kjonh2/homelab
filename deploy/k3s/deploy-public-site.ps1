@@ -5,6 +5,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if ($VpsHost -notmatch '^[A-Za-z0-9@._:-]+$') {
+    throw 'VpsHost must be a plain Tailscale SSH destination such as ubuntu@vps-4e5174e4.'
+}
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $siteDir = Join-Path $repoRoot 'public-site'
 $distDir = Join-Path $siteDir 'dist'
@@ -58,29 +61,68 @@ function Invoke-RemoteKubectlApplyText {
 
     $processInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $processInfo.FileName = $tailscaleExe
-    [void]$processInfo.ArgumentList.Add('ssh')
-    [void]$processInfo.ArgumentList.Add($VpsHost)
-    [void]$processInfo.ArgumentList.Add('sudo -n k3s kubectl apply -f -')
+    # Use Arguments instead of ArgumentList so this also works in Windows PowerShell 5.1.
+    $processInfo.Arguments = 'ssh "{0}" "{1}"' -f $VpsHost, 'sudo -n k3s kubectl apply -f -'
     $processInfo.RedirectStandardInput = $true
     $processInfo.RedirectStandardOutput = $true
     $processInfo.RedirectStandardError = $true
-    $processInfo.StandardInputEncoding = [System.Text.UTF8Encoding]::new($false)
-    $processInfo.StandardOutputEncoding = [System.Text.UTF8Encoding]::new($false)
-    $processInfo.StandardErrorEncoding = [System.Text.UTF8Encoding]::new($false)
+    $utf8 = [System.Text.UTF8Encoding]::new($false)
+    foreach ($encodingSetting in @(
+        @{ Name = 'StandardOutputEncoding'; Value = $utf8 },
+        @{ Name = 'StandardErrorEncoding'; Value = $utf8 }
+    )) {
+        $property = $processInfo.GetType().GetProperty($encodingSetting.Name)
+        if ($property) { $property.SetValue($processInfo, $encodingSetting.Value, $null) }
+    }
     $processInfo.UseShellExecute = $false
 
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $processInfo
     [void]$process.Start()
-    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
-    $stderrTask = $process.StandardError.ReadToEndAsync()
-    $process.StandardInput.Write($Content)
+    $stdoutReader = $process.StandardOutput
+    $stderrReader = $process.StandardError
+    $stdoutTask = $stdoutReader.ReadLineAsync()
+    $stderrTask = $stderrReader.ReadLineAsync()
+    $inputBytes = $utf8.GetBytes($Content)
+    $process.StandardInput.BaseStream.Write($inputBytes, 0, $inputBytes.Length)
+    $process.StandardInput.BaseStream.Flush()
     $process.StandardInput.Close()
+
+    $deadline = [DateTime]::UtcNow.AddMinutes(5)
+    while (-not $process.HasExited) {
+        if ($stdoutTask.IsCompleted) {
+            $line = $stdoutTask.GetAwaiter().GetResult()
+            if ($null -ne $line) {
+                Write-Output $line
+                $stdoutTask = $stdoutReader.ReadLineAsync()
+            }
+        }
+        if ($stderrTask.IsCompleted) {
+            $line = $stderrTask.GetAwaiter().GetResult()
+            if ($null -ne $line) {
+                [Console]::Error.WriteLine($line)
+                $stderrTask = $stderrReader.ReadLineAsync()
+            }
+        }
+        if ([DateTime]::UtcNow -ge $deadline) {
+            try { $process.Kill() } catch {}
+            throw 'Remote kubectl apply timed out after five minutes.'
+        }
+        Start-Sleep -Milliseconds 100
+    }
+
     $process.WaitForExit()
-    $stdout = $stdoutTask.GetAwaiter().GetResult()
-    $stderr = $stderrTask.GetAwaiter().GetResult()
-    if ($stdout) { Write-Output $stdout.TrimEnd() }
-    if ($stderr) { Write-Error $stderr.TrimEnd() -ErrorAction Continue }
+    foreach ($readerState in @(
+        @{ Reader = $stdoutReader; Task = $stdoutTask; IsError = $false },
+        @{ Reader = $stderrReader; Task = $stderrTask; IsError = $true }
+    )) {
+        $line = $readerState.Task.GetAwaiter().GetResult()
+        while ($null -ne $line) {
+            if ($readerState.IsError) { [Console]::Error.WriteLine($line) }
+            else { Write-Output $line }
+            $line = $readerState.Reader.ReadLineAsync().GetAwaiter().GetResult()
+        }
+    }
     if ($process.ExitCode -ne 0) { throw "Remote kubectl apply failed with exit code $($process.ExitCode)." }
 }
 
