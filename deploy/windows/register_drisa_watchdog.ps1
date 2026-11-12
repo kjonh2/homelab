@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $taskName = 'Drisa Watchdog'
 $drisaDir = Join-Path $env:USERPROFILE 'workspace\drisa'
-$script = Join-Path $drisaDir 'drisa_watchdog.ps1'
+$script = Join-Path $drisaDir 'drisa_watchdog_hidden.vbs'
 
 if (-not (Test-Path -LiteralPath $script)) {
     throw "Drisa watchdog script not found: $script"
@@ -11,8 +11,8 @@ $logonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $repeatTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
     -RepetitionInterval (New-TimeSpan -Minutes 1) -RepetitionDuration (New-TimeSpan -Days 3650)
 $repeatTrigger.Repetition.StopAtDurationEnd = $false
-$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument (
-    '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $script + '"'
+$action = New-ScheduledTaskAction -Execute (Join-Path $env:SystemRoot 'System32\wscript.exe') -Argument (
+    '//B //NoLogo "' + $script + '"'
 ) -WorkingDirectory $drisaDir
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 1)

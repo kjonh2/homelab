@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import shutil
 import sys
 from pathlib import Path
 
@@ -14,6 +15,7 @@ DATABASES = {
     "k3s-state": "/source/k3s-db/state.db",
 }
 OUTPUT = Path("/sqlite-backups")
+DRISA_DUMP = Path("/source/storage").glob("*/drisa-memory/backups/drisa-memory.dump")
 
 
 def snapshot(name: str, pattern: str) -> None:
@@ -55,6 +57,15 @@ def main() -> int:
             if name not in DATABASES:
                 raise RuntimeError(f"Unknown SQLite database: {name}")
             snapshot(name, DATABASES[name])
+        # PostgreSQL writes a fresh logical dump through the pod's loopback
+        # address. Copy it into the same Restic input as SQLite
+        # snapshots so restore validation has a stable path.
+        if sys.argv[1:] == []:
+            dumps = list(DRISA_DUMP)
+            if len(dumps) != 1 or not dumps[0].is_file() or dumps[0].stat().st_size == 0:
+                raise RuntimeError(f"Expected exactly one non-empty Drisa PostgreSQL dump, found {len(dumps)}")
+            shutil.copy2(dumps[0], OUTPUT / "drisa-memory.dump")
+            print("PostgreSQL dump copied: drisa-memory", flush=True)
     except Exception as exc:
         print(f"SQLite backup preparation failed: {exc}", file=sys.stderr)
         return 1

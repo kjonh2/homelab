@@ -27,6 +27,7 @@ from pathlib import Path
 
 import websockets
 from drisa_speech_text import is_utterance_echo, prepare_spoken_text
+from drisa_memory import chat as memory_chat
 
 BASE = Path(os.environ.get("DRISA_HOME", str(Path.home() / "workspace" / "drisa")))
 WHISPER_EXE = Path(os.environ.get("DRISA_WHISPER_EXE", r"C:\Whisper.Cpp\whisper-cli.exe"))
@@ -361,22 +362,22 @@ def llm_reply(text: str) -> str:
         import requests
         cfg = _unsloth_cfg()
         owner = os.environ.get("DRISA_OWNER_NAME", cfg.get("assistant_owner", "utilizador")).strip() or "utilizador"
-        payload = {
-            "model": cfg["llm_model"],
-            "messages": [
-                {"role": "system", "content": f"És a Drisa, assistente pessoal de {owner}. Responde em português de Portugal com uma resposta final curta, natural e pronta a ser dita em voz alta pelo Kokoro. Não mostres raciocínio, análise, passos internos, etiquetas ou markdown. Se não souberes, dizes."},
-                {"role": "user", "content": text}
-            ],
-            "max_tokens": 120,
-            "temperature": 0.7,
-        }
+        system_prompt = f"És a Drisa, assistente pessoal de {owner}. Responde em português de Portugal com uma resposta final curta, natural e pronta a ser dita em voz alta pelo Kokoro. Não mostres raciocínio, análise, passos internos, etiquetas ou markdown. Se não souberes, dizes."
         headers = {"Content-Type": "application/json"}
         if cfg["llm_key"]:
             headers["Authorization"] = f"Bearer {cfg['llm_key']}"
-        r = requests.post(f"{cfg['llm_url']}/chat/completions", json=payload, headers=headers, timeout=90)
-        r.raise_for_status()
-        d = r.json()
-        reply = prepare_spoken_text(d["choices"][0]["message"]["content"])
+        reply = memory_chat(
+            text, system_prompt=system_prompt, base_url=cfg["llm_url"], key=cfg["llm_key"],
+            model=cfg["llm_model"], max_tokens=120, temperature=0.7,
+            spoken_cleaner=prepare_spoken_text,
+        )
+        if reply is None:
+            payload = {"model": cfg["llm_model"], "messages": [
+                {"role": "system", "content": system_prompt}, {"role": "user", "content": text}],
+                "max_tokens": 120, "temperature": 0.7}
+            r = requests.post(f"{cfg['llm_url']}/chat/completions", json=payload, headers=headers, timeout=90)
+            r.raise_for_status()
+            reply = prepare_spoken_text(r.json()["choices"][0]["message"]["content"])
         if is_utterance_echo(text, reply):
             print("[llm] resposta igual à transcrição ignorada")
             return ""

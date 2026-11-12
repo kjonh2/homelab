@@ -722,6 +722,7 @@ class DrisaAssistant:
                     "Não mostres raciocínio, análise, passos internos, etiquetas ou markdown. "
                     "Não uses emojis. Se não souberes, dizes."
                 )
+                from drisa_memory import chat as memory_chat
                 seen_urls = set()
                 for provider_name, base_url, key in providers:
                     if not base_url or base_url in seen_urls:
@@ -732,6 +733,23 @@ class DrisaAssistant:
                         headers["Authorization"] = f"Bearer {key}"
 
                     for output_budget in (max_tokens, min(max_tokens * 2, 400)):
+                        try:
+                            response = memory_chat(
+                                text, system_prompt=system_prompt, base_url=base_url, key=key,
+                                model=model, max_tokens=output_budget, temperature=temperature,
+                                spoken_cleaner=prepare_spoken_text,
+                            )
+                            if response and not is_utterance_echo(text, response):
+                                logger.info("LLM response received from %s with PostgreSQL conversation memory", provider_name)
+                                try:
+                                    with open(DRISA_HOME / "drisa_response.tmp", "w", encoding="utf-8") as f:
+                                        f.write(response)
+                                except Exception as e:
+                                    logger.error(f"Failed to write response bridge: {e}")
+                                self._gemini_processing = False
+                                return response
+                        except Exception as e:
+                            logger.warning("Conversation memory failed (%s); trying one-shot LLM", type(e).__name__)
                         payload = _json.dumps({
                             "model": model,
                             "messages": [

@@ -1,2 +1,4 @@
 requests==2.34.2
 websockets==17.3
+cryptography==50.0.2
+psycopg[binary]==3.2.9
