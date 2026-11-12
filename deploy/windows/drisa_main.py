@@ -9,6 +9,7 @@ import json
 import hashlib
 import time
 import logging
+import re
 import threading
 import queue
 import signal
@@ -723,6 +724,18 @@ class DrisaAssistant:
                     data = _json.loads(resp.read().decode("utf-8"))
 
                 response = prepare_spoken_text(data["choices"][0]["message"]["content"])
+                if not response or is_utterance_echo(text, response):
+                    retry_payload = _json.loads(payload)
+                    retry_payload["max_tokens"] = min(max_tokens * 2, 400)
+                    logger.warning("Unsloth returned no clean answer; retrying with a larger output budget")
+                    retry_req = urllib.request.Request(
+                        f"{base_url}/chat/completions",
+                        data=_json.dumps(retry_payload).encode("utf-8"),
+                        headers=headers,
+                    )
+                    with urllib.request.urlopen(retry_req, timeout=60) as retry_resp:
+                        retry_data = _json.loads(retry_resp.read().decode("utf-8"))
+                    response = prepare_spoken_text(retry_data["choices"][0]["message"]["content"])
                 if is_utterance_echo(text, response):
                     logger.warning("Unsloth LLM echoed the utterance; ignoring the response")
                     response = ""
@@ -805,7 +818,7 @@ class DrisaAssistant:
         """Return a safe fallback without repeating the user's utterance."""
         text_lower = text.lower().strip()
 
-        if any(greeting in text_lower for greeting in ["oi", "olá", "hello", "hi"]):
+        if re.search(r"\b(?:oi|olá|hello|hi)\b", text_lower):
             resp = "Oi Kiko! Tudo bem? Como posso ajudar você hoje?"
         elif any(thanks in text_lower for thanks in ["obrigado", "obrigada", "thanks", "thank you"]):
             resp = "De nada, Kiko! Fico feliz em ajudar."
