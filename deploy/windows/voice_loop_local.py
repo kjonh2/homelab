@@ -38,6 +38,20 @@ _AUDIO_MODELS = {
     "parakeet": {"package_id": "parakeet_tdt_q8_0", "task": "asr"},
     "kokoro": {"package_id": "kokoro_82m_q8_0", "task": "tts"},
 }
+_AUDIO_MODEL_ALIASES = {
+    "moss": "moss", "moss-transcribe-diarize-gguf": "moss",
+    "audio-cpp/audio.cpp-gguf/moss-transcribe-diarize-gguf": "moss",
+    "moss_transcribe_diarize_q4_k": "moss",
+    "parakeet": "parakeet", "parakeet-tdt-0.6b-v3-gguf": "parakeet",
+    "audio-cpp/audio.cpp-gguf/parakeet-tdt-0.6b-v3-gguf": "parakeet",
+    "parakeet_tdt_q8_0": "parakeet",
+    "kokoro": "kokoro", "kokoro-82m-gguf": "kokoro",
+    "audio-cpp/audio.cpp-gguf/kokoro-82m-gguf": "kokoro", "kokoro_82m_q8_0": "kokoro",
+}
+
+def _normalize_audio_model(value, default):
+    key = str(value or default).strip().lower()
+    return _AUDIO_MODEL_ALIASES.get(key, key)
 _remote_llm_url = os.environ.get("DRISA_LLM_URL", "").strip()
 LLM_URL = (_remote_llm_url or BASE_URL).rstrip("/")
 LLM_KEY = os.environ.get("DRISA_LLM_KEY", "").strip()
@@ -99,9 +113,9 @@ def audio_autosave_tick(chunk_bytes, force=False):
         except OSError: pass
 
 LLM_MODEL = os.environ.get("DRISA_LLM_MODEL", "AtomicChat/LFM3-1.7B-Uncensored-GGUF")
-STT_MODEL = os.environ.get("DRISA_STT_MODEL", "audio-cpp/audio.cpp-gguf/MOSS-Transcribe-Diarize-GGUF")
-STT_FALLBACK_MODEL = os.environ.get("DRISA_STT_FALLBACK_MODEL", "audio-cpp/audio.cpp-gguf/Parakeet-TDT-0.6B-v3-GGUF")
-TTS_MODEL = os.environ.get("DRISA_TTS_MODEL", "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF")
+STT_MODEL = _normalize_audio_model(os.environ.get("DRISA_STT_MODEL"), "moss")
+STT_FALLBACK_MODEL = _normalize_audio_model(os.environ.get("DRISA_STT_FALLBACK_MODEL"), "parakeet")
+TTS_MODEL = _normalize_audio_model(os.environ.get("DRISA_TTS_MODEL"), "kokoro")
 TTS_VOICE = os.environ.get("DRISA_TTS_VOICE", "pf_dora")
 WHISPER = r"C:\Whisper.Cpp\whisper-cli.exe"
 WHISPER_MODEL = r"C:\Whisper.Cpp\models\ggml-base.bin"

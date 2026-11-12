@@ -49,21 +49,45 @@ DEFAULT_CONFIG = {
     "port": 8765,
     "stt_engine": "api",                # "api" | "whisper" | "deepgram"
     "unsloth_url": "http://127.0.0.1:8888/v1",
-    "stt_model": "audio-cpp/audio.cpp-gguf/MOSS-Transcribe-Diarize-GGUF",
-    "fallback_stt_model": "audio-cpp/audio.cpp-gguf/Parakeet-TDT-0.6B-v3-GGUF",
+    "stt_model": "moss",
+    "fallback_stt_model": "parakeet",
     "llm_model": "AtomicChat/LFM3-1.7B-Uncensored-GGUF",
-    "tts_model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+    "tts_model": "kokoro",
     "tts_voice": "pf_dora",
     "allowlist": [],
     "policies": {},
     "unknown": {"transcribe": True, "reply": False, "priority": False}
 }
 
+_AUDIO_MODEL_ALIASES = {
+    "moss": "moss",
+    "moss-transcribe-diarize-gguf": "moss",
+    "audio-cpp/audio.cpp-gguf/moss-transcribe-diarize-gguf": "moss",
+    "moss_transcribe_diarize_q4_k": "moss",
+    "parakeet": "parakeet",
+    "parakeet-tdt-0.6b-v3-gguf": "parakeet",
+    "audio-cpp/audio.cpp-gguf/parakeet-tdt-0.6b-v3-gguf": "parakeet",
+    "parakeet_tdt_q8_0": "parakeet",
+    "kokoro": "kokoro",
+    "kokoro-82m-gguf": "kokoro",
+    "audio-cpp/audio.cpp-gguf/kokoro-82m-gguf": "kokoro",
+    "kokoro_82m_q8_0": "kokoro",
+}
+
+
+def _normalize_audio_model(value: str, default: str) -> str:
+    key = str(value or default).strip().lower()
+    return _AUDIO_MODEL_ALIASES.get(key, key)
+
 
 def load_config():
     if not CONFIG_PATH.exists():
         CONFIG_PATH.write_text(json.dumps(DEFAULT_CONFIG, indent=2))
     cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    # audio.cpp serves short API IDs (moss/parakeet/kokoro), while older
+    # configs and package IDs used the downloadable model names.
+    for field, default in (("stt_model", "moss"), ("fallback_stt_model", "parakeet"), ("tts_model", "kokoro")):
+        cfg[field] = _normalize_audio_model(cfg.get(field), default)
     if cfg.get("unsloth_url") == "http://127.0.0.1:8888/v1":
         cfg["unsloth_url"] = "http://127.0.0.1:8888/v1"
     return cfg
@@ -107,10 +131,10 @@ def _unsloth_cfg():
         "llm_host": llm_host,
         "llm_url": llm_url,
         "llm_key": llm_key,
-        "stt_model": os.environ.get("DRISA_STT_MODEL", cfg.get("stt_model", "audio-cpp/audio.cpp-gguf/MOSS-Transcribe-Diarize-GGUF")),
-        "fallback_stt_model": os.environ.get("DRISA_STT_FALLBACK_MODEL", cfg.get("fallback_stt_model", "audio-cpp/audio.cpp-gguf/Parakeet-TDT-0.6B-v3-GGUF")),
+        "stt_model": _normalize_audio_model(os.environ.get("DRISA_STT_MODEL", cfg.get("stt_model")), "moss"),
+        "fallback_stt_model": _normalize_audio_model(os.environ.get("DRISA_STT_FALLBACK_MODEL", cfg.get("fallback_stt_model")), "parakeet"),
         "llm_model": os.environ.get("DRISA_LLM_MODEL", cfg.get("llm_model", "AtomicChat/LFM3-1.7B-Uncensored-GGUF")),
-        "tts_model": os.environ.get("DRISA_TTS_MODEL", cfg.get("tts_model", "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF")),
+        "tts_model": _normalize_audio_model(os.environ.get("DRISA_TTS_MODEL", cfg.get("tts_model")), "kokoro"),
         "tts_voice": os.environ.get("DRISA_TTS_VOICE", cfg.get("tts_voice", "pf_dora")),
     }
 
