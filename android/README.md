@@ -2,6 +2,8 @@
 
 Native Android client for Iku services. The modern flavor includes Firebase sign-in, a private Iku Auth session link, encrypted token storage using Android Keystore, Tailscale Drisa voice access, model status and selection for the laptop/VPS, service shortcuts, files, and printer controls.
 
+The **Início** screen reads live Nextcloud, n8n, and LFM3 health through the private Iku portal. It sends the short-lived Iku access token over HTTPS; connect the phone to Tailscale and link the Iku session in **Perfil** first. It does not query the old LAN Prometheus address.
+
 ## Build and install
 
 Build the modern debug APK:

@@ -4,6 +4,8 @@ Private Next.js portal deployed to the VPS and served only inside the Tailscale 
 
 The **Administração** page is restricted to authenticated administrator sessions with TOTP. Administrators can invite normal users with single-use 72-hour tokens, list and disable or re-enable accounts, revoke pending invitations, and invalidate a disabled user's sessions, Android refresh-token families, and API tokens. Invitation hashes are stored in SQLite; the raw code is shown once and is entered in `/invite`, never placed in a URL. Invites cannot assign the administrator role. Nextcloud, n8n, and LFM3 keep their own authentication; shared auth gateway and SSO are not implemented. Do not describe the current setup as SSO.
 
+`GET /api/homelab/status` is the Android Início status endpoint. It requires an Iku bearer token, validates the token with the internal Auth service, and returns only service health summaries. It omits the internal probe URLs and does not proxy service data.
+
 ## Development
 
 ```powershell
