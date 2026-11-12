@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { ArrowRight, LockKeyhole, ShieldCheck, UserRound, MonitorSmartphone, Activity, Download, FileClock, Settings2, KeyRound } from "lucide-react";
+import { ArrowRight, LockKeyhole, ShieldCheck, UserRound, Download, FileClock, Settings2, KeyRound } from "lucide-react";
 import { PreviewNotice } from "@/components/iku/portal-shell";
 import { ServiceCards } from "@/components/iku/service-cards";
 import { sectionBySlug } from "@/lib/portal-sections";
@@ -41,13 +41,15 @@ export default async function SectionPage({ params }: { params: Promise<{ sectio
     if (process.env.IKU_AUTH_ENFORCE === "true" && !session) redirect("/login");
   }
 
-  if (slug === "profile" || slug === "devices" || slug === "sessions" || slug === "security") {
+  if (slug === "devices") {
+    return <div className="section-page"><PreviewNotice /><div className="page-heading"><div><span className="eyebrow muted-eyebrow">ACESSO À CONTA</span><h1>Dispositivos</h1><p>Consulta os dispositivos ligados à tua conta e termina acessos que já não reconheces.</p></div></div><SessionManager /></div>;
+  }
+
+  if (slug === "profile" || slug === "sessions" || slug === "security") {
     const current = session?.session;
     const user = session?.user;
     const details = {
       profile: { eyebrow: "CONTA IKU", title: "Perfil", icon: UserRound, heading: user?.email ?? "Conta não disponível", body: `Função: ${user?.roles.join(", ") || "conta"}. O portal usa autenticação local Iku.`, meta: `ID de utilizador: ${user?.id ?? "indisponível"}` },
-      devices: { eyebrow: "DISPOSITIVO ATUAL", title: "Dispositivos", icon: MonitorSmartphone, heading: current?.device_name || "Navegador atual", body: `Cliente autenticado: ${current?.client ?? "indisponível"}. A API ainda não disponibiliza a lista nem a revogação de outros dispositivos.`, meta: `Sessão: ${current?.id ?? "indisponível"}` },
-      sessions: { eyebrow: "SESSÃO ATUAL", title: "Sessões", icon: Activity, heading: current?.device_name || "Sessão do navegador", body: `Iniciada em ${current?.created_at ?? "indisponível"}. Expira em ${current?.expires_at ?? "indisponível"}. Só a sessão atual é apresentada; a API ainda não lista outras sessões.`, meta: `Cliente: ${current?.client ?? "indisponível"}` },
       security: { eyebrow: "PROTEÇÃO DA CONTA", title: "Segurança", icon: ShieldCheck, heading: user?.mfa_enabled ? "2FA ativo" : "2FA não ativo", body: "O login do portal usa sessão Iku protegida por cookie. O primeiro administrador requer 2FA; a gestão de fatores e tokens ainda não está disponível nesta página.", meta: "Acesso às páginas privadas limitado ao tailnet Tailscale." },
     }[slug];
     if (slug === "sessions") return <div className="section-page"><PreviewNotice /><div className="page-heading"><div><span className="eyebrow muted-eyebrow">SESSÕES ATIVAS</span><h1>Sessões</h1><p>Consulta e termina os dispositivos com acesso à tua conta Iku.</p></div></div><SessionManager /></div>;
