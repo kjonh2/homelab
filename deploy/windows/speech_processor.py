@@ -6,6 +6,7 @@ import sounddevice as sd
 import soundfile as sf
 import threading
 from typing import Dict, Any
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -71,27 +72,45 @@ class SpeechProcessor:
             except Exception as e:
                 logger.warning(f"Deepgram failed ({e}), fallback local")
         elif engine == "api":
+            primary_model = os.environ.get(
+                "DRISA_STT_MODEL", "audio-cpp/audio.cpp-gguf/MOSS-Transcribe-Diarize-GGUF"
+            ).strip()
+            fallback_model = os.environ.get(
+                "DRISA_STT_FALLBACK_MODEL", "audio-cpp/audio.cpp-gguf/Parakeet-TDT-0.6B-v3-GGUF"
+            ).strip()
             try:
-                result = self._transcribe_api(audio_data, language)
+                result = self._transcribe_api(audio_data, language, primary_model)
                 if result.get("text"):
                     return result
-                logger.warning("STT API sem texto, fallback local")
+                logger.warning("STT principal %s sem texto", primary_model)
             except Exception as e:
-                logger.warning(f"STT API failed ({e}), fallback local")
+                logger.warning("STT principal %s falhou (%s)", primary_model, e)
+            if fallback_model != primary_model:
+                try:
+                    result = self._transcribe_api(audio_data, language, fallback_model)
+                    if result.get("text"):
+                        return result
+                    logger.warning("STT fallback %s sem texto", fallback_model)
+                except Exception as e:
+                    logger.warning("STT fallback %s falhou (%s)", fallback_model, e)
         fallback = os.environ.get("DRISA_STT_FALLBACK", "").strip().lower()
         if fallback in ("1", "true", "yes", "local", "whisper"):
             return self._transcribe_local(audio_data, language)
         return {"text": "", "confidence": 0.0, "success": False, "error": f"{engine} stt failed"}
 
-    def _transcribe_api(self, audio_data: np.ndarray, language: str) -> Dict[str, Any]:
+    def _transcribe_api(self, audio_data: np.ndarray, language: str, model: str = None) -> Dict[str, Any]:
         """STT via servidor unsloth (/v1/audio/transcriptions)."""
         import requests, io, os, time
         import soundfile as sf
-        base = os.environ.get("DRISA_UNSLOTH_URL", "http://localhost:8888/v1")
+        base = os.environ.get("DRISA_STT_URL", "").strip() or os.environ.get("DRISA_UNSLOTH_URL", "http://localhost:8888/v1")
         if "[IP_ADDRESS]" in base or not base.strip():
             base = "http://localhost:8888/v1"
         key = os.environ.get("DRISA_UNSLOTH_KEY", "").strip()
-        model = os.environ.get("DRISA_STT_MODEL", "audio-cpp/audio.cpp-gguf/Parakeet-TDT-0.6B-v3-GGUF")
+        model = model or os.environ.get(
+            "DRISA_STT_MODEL", "audio-cpp/audio.cpp-gguf/MOSS-Transcribe-Diarize-GGUF"
+        )
+        if os.environ.get("DRISA_STT_HOST", "pc").strip().lower() == "pc":
+            self._ensure_stt_model_loaded(model)
         buf = io.BytesIO()
         sf.write(buf, audio_data.astype(np.float32), self.sample_rate, format="WAV", subtype="PCM_16")
         t0 = time.time()
@@ -105,12 +124,105 @@ class SpeechProcessor:
             data={"model": model, "language": language},
             timeout=180,
         )
+        if not r.ok:
+            logger.warning("STT endpoint HTTP %s for model %s: %s", r.status_code, model, r.text[:400])
         r.raise_for_status()
         text = (r.json().get("text") or "").strip()
         logger.info(f"STT API ({model}): '{text}' ({time.time()-t0:.1f}s)")
         if text:
             return {"text": text, "confidence": 1.0, "success": True}
         return {"text": "", "confidence": 0.0, "success": False, "error": "no speech detected"}
+
+    def _ensure_stt_model_loaded(self, model: str) -> None:
+        """Load the requested local Unsloth STT model only when it is not resident."""
+        import json
+        import requests
+
+        base = os.environ.get("DRISA_UNSLOTH_URL", "http://127.0.0.1:8888/v1").rstrip("/")
+        mcp_url = base.removesuffix("/v1") + "/mcp/"
+        key = os.environ.get("DRISA_UNSLOTH_KEY", "").strip()
+        if not key:
+            key_path = Path(os.environ.get("DRISA_HOME", Path.home() / "workspace" / "drisa")) / "unsloth.key"
+            try:
+                key = key_path.read_text(encoding="utf-8").strip()
+            except OSError:
+                key = ""
+        headers = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+
+        def call_tool(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+            response = requests.post(
+                mcp_url,
+                headers=headers,
+                json={"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                      "params": {"name": name, "arguments": arguments}},
+                timeout=(5, 260),
+            )
+            response.raise_for_status()
+            envelope = None
+            for line in response.text.splitlines():
+                if line.startswith("data: "):
+                    try:
+                        envelope = json.loads(line[6:])
+                    except json.JSONDecodeError:
+                        continue
+            if envelope is None:
+                envelope = response.json()
+            if envelope.get("error"):
+                raise RuntimeError(str(envelope["error"].get("message", "Unsloth MCP error")))
+            result = envelope.get("result", {})
+            if result.get("isError"):
+                detail = next((item.get("text", "") for item in result.get("content", [])
+                               if item.get("type") == "text"), "Unsloth model operation failed")
+                raise RuntimeError(detail[:400])
+            structured = result.get("structuredContent")
+            if isinstance(structured, dict):
+                return structured
+            for item in result.get("content", []):
+                if item.get("type") == "text":
+                    try:
+                        parsed = json.loads(item.get("text", ""))
+                        if isinstance(parsed, dict):
+                            return parsed
+                    except json.JSONDecodeError:
+                        return {"message": item.get("text", "")}
+            return {}
+
+        catalog = call_tool("list_models", {"kind": "stt", "source": "local", "loaded_only": False})
+        current = next((item for item in catalog.get("models", []) if item.get("id") == model), None)
+        if current and current.get("loaded") is True:
+            return
+        logger.info("Loading local STT model %s", model)
+        result = call_tool("load_model", {"kind": "stt", "model": model, "wait_s": 240})
+        logger.info("Local STT model load finished: %s", result.get("message", "ready"))
+
+    def _ensure_remote_audio_model_loaded(self, base: str, model: str) -> None:
+        """Load a configured remote audio.cpp model when it is not resident."""
+        import requests
+
+        headers = {}
+        key = os.environ.get("DRISA_UNSLOTH_KEY", "").strip()
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+        response = requests.get(f"{base}/models", headers=headers, timeout=(5, 15))
+        response.raise_for_status()
+        current = next((item for item in response.json().get("data", []) if item.get("id") == model), None)
+        if current and current.get("loaded") is True:
+            return
+        if not current or not current.get("path"):
+            raise RuntimeError(f"Remote audio model {model} has no configured model path")
+        response = requests.post(
+            f"{base}/models/load", headers={**headers, "Content-Type": "application/json"},
+            json={key: current.get(key) for key in ("id", "path", "family", "task", "mode", "device")},
+            timeout=(5, 260),
+        )
+        if not response.ok:
+            raise RuntimeError(f"Remote model load HTTP {response.status_code}: {response.text[:400]}")
+        response.raise_for_status()
+        if response.json().get("success") is False:
+            raise RuntimeError(f"Remote audio model {model} could not be loaded")
+        logger.info("Remote audio model loaded: %s", model)
 
     def _transcribe_deepgram(self, audio_data: np.ndarray, language: str = "pt") -> Dict[str, Any]:
         """STT via Deepgram direto, usando deepgram.key ou env DEEPGRAM_API_KEY."""
@@ -271,11 +383,13 @@ class SpeechProcessor:
         import requests, io, os, time
         import sounddevice as sd
         import soundfile as sf
-        base = os.environ.get("DRISA_UNSLOTH_URL", "http://localhost:8888/v1")
+        base = os.environ.get("DRISA_TTS_URL", "").strip() or os.environ.get("DRISA_UNSLOTH_URL", "http://localhost:8888/v1")
         if "[IP_ADDRESS]" in base or not base.strip():
             base = "http://localhost:8888/v1"
         key = os.environ.get("DRISA_UNSLOTH_KEY", "").strip()
-        model = os.environ.get("DRISA_TTS_MODEL", "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF")
+        model = os.environ.get("DRISA_TTS_MODEL", "kokoro")
+        if os.environ.get("DRISA_TTS_HOST", "pc").strip().lower() != "pc":
+            self._ensure_remote_audio_model_loaded(base.rstrip("/"), model)
         voice = os.environ.get("DRISA_TTS_VOICE", "pf_dora")
         t0 = time.time()
         headers = {}

@@ -27,11 +27,13 @@ function Set-DrisaRuntimeEnvironment([bool]$GamingMode) {
     $env:DRISA_STT_MODEL = if ($config.stt_model) { $config.stt_model } else { 'moss' }
     $env:DRISA_STT_FALLBACK_MODEL = if ($config.fallback_stt_model) { $config.fallback_stt_model } else { 'parakeet' }
     $env:DRISA_STT_URL = if ($config.stt_url) { $config.stt_url } elseif ($config.stt_host -eq 'homelab') { $env:DRISA_AUDIO_URL } else { $env:DRISA_UNSLOTH_URL }
+    $env:DRISA_STT_HOST = if ($config.stt_host) { $config.stt_host } else { 'pc' }
     $env:DRISA_LLM_MODEL = if ($config.llm_model) { $config.llm_model } else { 'AtomicChat/LFM3-1.7B-Uncensored-GGUF' }
     $env:DRISA_LLM_HOST = if ($config.llm_host) { $config.llm_host } else { 'pc' }
     if ($config.llm_url) { $env:DRISA_LLM_URL = $config.llm_url }
     $env:DRISA_TTS_MODEL = if ($config.tts_model) { $config.tts_model } else { 'kokoro' }
     $env:DRISA_TTS_URL = if ($config.tts_url) { $config.tts_url } elseif ($config.tts_host -eq 'homelab') { $env:DRISA_AUDIO_URL } else { $env:DRISA_UNSLOTH_URL }
+    $env:DRISA_TTS_HOST = if ($config.tts_host) { $config.tts_host } else { 'pc' }
     $env:DRISA_TTS_VOICE = if ($config.tts_voice) { $config.tts_voice } else { 'pf_dora' }
 
     $keyPath = Join-Path $drisaDir 'unsloth.key'

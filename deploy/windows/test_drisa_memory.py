@@ -24,10 +24,9 @@ class DrisaMemorySummaryTests(unittest.TestCase):
     @patch.object(drisa_memory.requests, "post")
     def test_summarize_reports_only_archived_messages_in_summary(self, post, render):
         def token_count(_url, _key, _model, messages):
-            # Keep the two newest complete turns under the 30% target.
-            if messages[-1].get("role") == "assistant" and messages[-1].get("content") == "":
-                return (20 * max(0, len(messages) - 2), 1000)
-            return (700, 1000)
+            # Count the accumulated recent turns, system prompt, and pending
+            # user message so only the newest complete turn fits the 30% target.
+            return (20 * max(0, len(messages) - 2), 1000)
 
         render.side_effect = token_count
         response = Mock()

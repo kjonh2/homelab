@@ -44,6 +44,9 @@ class AudioProcessor:
         self.is_speaking = False
         self.silence_frames = 0
         self.max_silence_frames = max_silence_frames  # 60 frames * 30ms = ~1.8s
+        # Bound a VAD segment that never reaches silence; otherwise background
+        # audio can grow into an oversized upload and repeatedly trigger Drisa.
+        self.max_segment_frames = max(1, int(60_000 / frame_duration_ms))
 
         # --- VAD mais permissivo para fala contínua ---
         self.open_frames_needed = 1          # abrir quase imediato
@@ -194,6 +197,17 @@ class AudioProcessor:
                 self.silence_frames += 1
                 if self.silence_frames >= self.max_silence_frames:
                     self._emit_segment()
+                    return
+            if len(self.speech_buffer) >= self.max_segment_frames:
+                logger.warning(
+                    "Speech segment reached %d seconds without confirmed silence; dropping it",
+                    self.max_segment_frames * self.frame_duration_ms // 1000,
+                )
+                self.speech_buffer = []
+                self.is_speaking = False
+                self.silence_frames = 0
+                self.pending_open = 0
+                self.voice_frames_in_segment = 0
 
         try:
             with sd.InputStream(device=self.device, samplerate=self.sample_rate,

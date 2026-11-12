@@ -95,11 +95,6 @@ class DrisaAssistant:
         self.speech_queue = queue.Queue()
         self.response_queue = queue.Queue()
 
-        # Conversation context (memory array)
-        self.conversation_history = []  # List of {"role": "user"/"assistant", "content": str}
-        self.max_context_tokens = 2000  # Approx token limit before summarization
-        self.context_summary = ""  # Compressed summary when history gets too long
-
         # Threads
         self.audio_thread: Optional[threading.Thread] = None
         self.processing_thread: Optional[threading.Thread] = None
@@ -718,7 +713,8 @@ class DrisaAssistant:
                     "O teu nome é Drisa (diminutivo de Adriana). "
                     "Falas com o Kiko, o teu utilizador. "
                     "Responde de forma natural, direta e em português de Portugal. "
-                    "Dá apenas a resposta final, curta, natural e pronta para ser dita em voz alta pelo Kokoro. "
+                    "Dá apenas a resposta final, natural e pronta para ser dita em voz alta pelo Kokoro. "
+                    "Limita-te a duas frases curtas e, sempre que possível, a 40 palavras. "
                     "Não mostres raciocínio, análise, passos internos, etiquetas ou markdown. "
                     "Não uses emojis. Se não souberes, dizes."
                 )

@@ -95,13 +95,16 @@ def _summarize(messages, base_url, key, model, n_ctx):
     # Preserve newest complete turns, aiming at 30% including the next user message and reply reserve.
     for i in range(len(turns) - 2, -1, -2):
         pair = turns[i:i + 2]
-        trial = [system] + ([{"role": "system", "name": "drisa_memory_summary", "content": summary}] if summary else []) + pair + keep + [{"role": "assistant", "content": ""}]
+        # Count accumulated recent turns and the pending user message together.
+        # Counting each pair separately can keep every turn and exceed the target.
+        candidate = pair + keep
+        trial = [system] + ([{"role": "system", "name": "drisa_memory_summary", "content": summary}] if summary else []) + candidate + [pending_user]
         try:
             count, _ = _render_and_count(base_url, key, model, trial)
         except Exception:
             break
         if count + 256 <= int(n_ctx * CONTEXT_TARGET):
-            keep = pair + keep
+            keep = candidate
         else:
             break
     old = turns[:len(turns) - len(keep)] if keep else turns

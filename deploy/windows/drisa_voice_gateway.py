@@ -514,7 +514,7 @@ def llm_reply(text: str) -> str:
         import requests
         cfg = _unsloth_cfg()
         owner = os.environ.get("DRISA_OWNER_NAME", cfg.get("assistant_owner", "utilizador")).strip() or "utilizador"
-        system_prompt = f"És a Drisa, assistente pessoal de {owner}. Responde em português de Portugal com uma resposta final curta, natural e pronta a ser dita em voz alta pelo Kokoro. Não mostres raciocínio, análise, passos internos, etiquetas ou markdown. Se não souberes, dizes."
+        system_prompt = f"És a Drisa, assistente pessoal de {owner}. Responde em português de Portugal com uma resposta final, natural e pronta a ser dita em voz alta pelo Kokoro. Limita-te a duas frases curtas e, sempre que possível, a 40 palavras. Não mostres raciocínio, análise, passos internos, etiquetas ou markdown. Se não souberes, dizes."
         headers = {"Content-Type": "application/json"}
         if cfg["llm_key"]:
             headers["Authorization"] = f"Bearer {cfg['llm_key']}"
