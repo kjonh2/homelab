@@ -4,7 +4,6 @@ function Set-DrisaGamingEnvironment {
     $env:DRISA_TTS_ENGINE = 'sapi'
     $env:DRISA_LLM_URL = 'https://vps-4e5174e4.tail2931da.ts.net:8445/v1'
     $env:DRISA_LLM_HOST = 'vps'
-    # Let start_drisa.ps1 read the selected model from gateway_config.json.
     # Gaming mode changes where inference runs, not which text model is selected.
     Remove-Item Env:DRISA_LLM_MODEL -ErrorAction SilentlyContinue
 }
