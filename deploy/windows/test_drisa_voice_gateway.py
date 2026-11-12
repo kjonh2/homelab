@@ -306,6 +306,38 @@ class AudioPayloadTests(unittest.TestCase):
         self.assertEqual(resolved["stt_model"], "moss")
         self.assertEqual(resolved["fallback_stt_model"], "parakeet")
 
+    def test_pc_audio_endpoint_defaults_stay_local_when_llm_is_remote(self):
+        local_url = "http://127.0.0.1:8888/v1"
+        config = {
+            "unsloth_url": local_url, "llm_host": "vps",
+            "llm_url": "https://vps.example/v1", "audio_url": "http://127.0.0.1:8766/v1",
+            "stt_host": "pc", "tts_host": "pc",
+            "stt_model": "audio-cpp/audio.cpp-gguf/MOSS-Transcribe-Diarize-GGUF",
+            "fallback_stt_model": "audio-cpp/audio.cpp-gguf/Parakeet-TDT-0.6B-v3-GGUF",
+            "tts_model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+        }
+        with (
+            patch.object(gateway, "load_config", return_value=config),
+            patch.dict(os.environ, {
+                "DRISA_UNSLOTH_URL": local_url,
+                "DRISA_AUDIO_URL": config["audio_url"],
+                "DRISA_LLM_URL": "",
+                "DRISA_STT_URL": "",
+                "DRISA_TTS_URL": "",
+                "DRISA_STT_MODEL": config["stt_model"],
+                "DRISA_STT_FALLBACK_MODEL": config["fallback_stt_model"],
+                "DRISA_TTS_MODEL": config["tts_model"],
+                "DRISA_LLM_KEY": "",
+            }),
+        ):
+            resolved = gateway._unsloth_cfg()
+
+        self.assertEqual(resolved["llm_url"], "https://vps.example/v1")
+        self.assertEqual(resolved["stt_url"], local_url)
+        self.assertEqual(resolved["tts_url"], local_url)
+        self.assertEqual(resolved["stt_model"], config["stt_model"])
+        self.assertEqual(resolved["fallback_stt_model"], config["fallback_stt_model"])
+
 
 class GatewayAsyncAudioTests(unittest.IsolatedAsyncioTestCase):
     async def test_slow_inference_does_not_block_websocket_event_loop(self):

@@ -117,20 +117,21 @@ def _unsloth_cfg():
     if not llm_key and llm_host != "vps":
         llm_key = os.environ.get("DRISA_UNSLOTH_KEY", cfg.get("unsloth_key", "")).strip()
 
+    local_url = os.environ.get("DRISA_UNSLOTH_URL", cfg.get("unsloth_url", "http://127.0.0.1:8888/v1")).strip().rstrip("/")
+    audio_url = os.environ.get("DRISA_AUDIO_URL", cfg.get("audio_url", "")).strip().rstrip("/")
     stt_url = os.environ.get("DRISA_STT_URL", cfg.get("stt_url", "")).strip().rstrip("/")
     if not stt_url:
-        stt_url = cfg.get("audio_url", "").strip().rstrip("/") if cfg.get("stt_host") == "homelab" else llm_url
+        stt_url = audio_url if cfg.get("stt_host") == "homelab" else local_url
     tts_url = os.environ.get("DRISA_TTS_URL", cfg.get("tts_url", "")).strip().rstrip("/")
     if not tts_url:
-        tts_url = cfg.get("audio_url", "").strip().rstrip("/") if cfg.get("tts_host") == "homelab" else llm_url
-    audio_url = os.environ.get("DRISA_AUDIO_URL", cfg.get("audio_url", "")).strip().rstrip("/")
+        tts_url = audio_url if cfg.get("tts_host") == "homelab" else local_url
 
     def model_id(value, default, endpoint):
         selected = str(value or default).strip()
         return _normalize_audio_model(selected, default) if audio_url and endpoint == audio_url else selected
 
     return {
-        "base_url": os.environ.get("DRISA_UNSLOTH_URL", cfg.get("unsloth_url", "http://127.0.0.1:8888/v1")).rstrip("/"),
+        "base_url": local_url,
         "key": os.environ.get("DRISA_UNSLOTH_KEY", cfg.get("unsloth_key", "")).strip(),
         "audio_url": os.environ.get("DRISA_AUDIO_URL", cfg.get("audio_url", "")).strip().rstrip("/"),
         "audio_key": os.environ.get("DRISA_AUDIO_KEY", cfg.get("audio_key", "")).strip(),
