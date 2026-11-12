@@ -6,6 +6,8 @@ The **Administração** page is restricted to authenticated administrator sessio
 
 `GET /api/homelab/status` is the Android Início status endpoint. It requires an Iku bearer token, validates the token with the internal Auth service, and returns only service health summaries. It omits the internal probe URLs and does not proxy service data.
 
+Portal `0.1.9` and Auth `0.1.7` are deployed on the VPS. The endpoint returns 401 without a bearer session; the Redmi app's linked session successfully loaded all three service states on 2026-11-12.
+
 ## Development
 
 ```powershell

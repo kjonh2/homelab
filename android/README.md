@@ -26,4 +26,6 @@ Sign in with the existing Firebase account, connect the phone to the Iku Tailsca
 
 Open **Serviços → Falar com a Drisa** to enter the gateway token once. The app stores it encrypted with Android Keystore. The **Modelos da Drisa** controls show loaded models and allow choosing a model host (laptop or VPS) and category. Keep model and Drisa endpoints private to the tailnet.
 
+The modern debug APK was installed on the Redmi on 2026-11-12; the installed package hash matched the local build (`29E0892ABA3F6217E890C442C3EB9CE6A5173C5B0E49ED4AA08D9F124185E096`). After linking an active Iku session, Início displayed all three VPS services as available. The laptop gateway token was rotated on 2026-11-12; replace the saved Drisa token from `%USERPROFILE%\workspace\drisa\gateway_token.txt` before using voice or model controls again.
+
 The Iku Auth session bridge and Drisa controls are implemented; the Android client is still in private testing. User/device administration, release signing, and Play Store distribution are not complete.
