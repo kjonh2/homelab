@@ -1,74 +1,24 @@
-# Iku — Arquitetura Única
+# Iku homelab architecture
 
-## Ideia central
-O **Iku** é o sistema inteiro.  
-O homelab não é um projeto separado: **o homelab é uma instância do Iku**.
+The three machines have different jobs. They are not identical copies of the Iku stack.
 
-## Objetivo
-Ter a mesma plataforma Iku nas 3 máquinas:
-1. PC atual
-2. Homelab
-3. VPS OVH
+| Machine | Current role | Services and limits |
+| --- | --- | --- |
+| OVH VPS `vps-4e5174e4` | Primary K3s server and application host | Iku Auth, portal, PostgreSQL Drisa memory, Nextcloud, n8n, and the LFM3 router. Tailscale-only forwarding protects internal APIs; Cloudflare Tunnel publishes the website and portal login. It is the only control plane. |
+| Linux `homelab` | Tainted K3s fallback worker and off-host backup receiver | Restic repository and pruning/restore jobs, plus one public-site and Cloudflare Tunnel replica. The `homelab.role=fallback:NoSchedule` taint keeps ordinary workloads off this low-power machine. |
+| Windows laptop | Interactive Drisa client and third compute fallback | Always-on microphone listener and voice gateway. Normal mode uses laptop MOSS STT with Parakeet fallback, Kokoro TTS, and can run Unsloth locally. Gaming mode stops the local Unsloth server and 3D world while keeping the listener and gateway; the current tracked Gaming configuration still selects local Whisper.cpp and SAPI, so it does not yet meet the requested MOSS/Parakeet and Kokoro behavior. |
 
-## Stack dentro do Iku
-- **Nextcloud**
-- **n8n**
-- **Confy**
-- **llama.cpp**
-- **Web UI**
-- proxy reverso
-- DNS / redirects
-- backups
-- integrações Cloudflare / GitHub / MCP
+## Request and data paths
 
-## Regra
-Cada máquina tem a sua própria instalação do Iku, mas todas seguem:
-- a mesma estrutura
-- o mesmo nome
-- a mesma organização de serviços
-- o mesmo runbook base
+- The Redmi Iku app authenticates with Firebase and the Iku Auth bridge. Its private service status and model-management calls require an Iku session.
+- The Drisa voice gateway on the laptop is reached through its tailnet-only Tailscale Serve hostname. The gateway sends transcripts to the selected LFM3 host and sends only the final text to TTS.
+- LFM3 runs on the VPS at a private ClusterIP and tailnet HTTPS forward. One model is resident at a time; the uncensored LFM3 text model is the current selection.
+- MOSS, Parakeet, and Kokoro are selected from the laptop's local model service in Normal mode. A remote STT/TTS host for Gaming mode remains unimplemented.
+- The public React landing page is served by unprivileged Nginx. `app.iknowu.org` is proxied by that Nginx instance to the Iku portal service. Cloudflare Tunnel is the public ingress; application ports are not opened on the VPS firewall.
+- PostgreSQL stores encrypted Drisa messages and summaries on a VPS-local PVC. Restic sends encrypted backups to the homelab receiver; the restore drill verified the database backup path. This is recovery, not live database replication.
 
-## Camadas
-### 1. Base
-- Docker
-- Docker Compose
-- redes internas
-- volumes persistentes
+## Availability boundaries
 
-### 2. Serviços
-- Nextcloud
-- n8n
-- Confy
-- llama.cpp
-- webui
+K3s currently has two Ready nodes, but only the VPS runs the control plane. The public site and its Cloudflare connector each have two replicas, with required pod anti-affinity placing one on each node. This gives the static site an independent connector and origin on the homelab. The portal, Auth, PostgreSQL, Nextcloud, n8n, and LFM3 are still VPS workloads; their local-path storage is not replicated. They do not automatically fail over if the VPS is unavailable. The homelab can receive scheduled backups, but restoring services there remains a manual recovery operation.
 
-### 3. Acesso
-- subdomínios
-- Tunnel / proxy
-- Cloudflare
-- autenticação quando necessária
-
-### 4. Sincronização
-- export/import de perfil MCP
-- documentação única
-- configs espelhadas entre máquinas
-
-## Convenção de nomes
-- `iku` = stack principal
-- `homelab` = máquina que corre o Iku
-- `vps` = máquina remota que também corre o Iku
-- `pc` = máquina local que também corre o Iku
-
-## Próximo passo técnico
-Consolidar os serviços num único `docker-compose.yml` do Iku e dividir em:
-- `iku-core`
-- `iku-ai`
-- `iku-sync`
-- `iku-proxy`
-
-## Resultado esperado
-Ao arrancar qualquer uma das 3 máquinas:
-- o Iku sobe com os mesmos serviços principais
-- o acesso e a estrutura são consistentes
-- a diferença é só o hardware e o endpoint
-
+See [the resilience runbook](iku-resilience-runbook.md) for checks and recovery boundaries, [K3s deployment notes](../../deploy/k3s/README.md), and the [VPS capacity snapshot](iku-vps-capacity.md).

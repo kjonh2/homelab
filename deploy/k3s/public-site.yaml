@@ -57,9 +57,12 @@ metadata:
     app.kubernetes.io/name: iku-public-site
     app.kubernetes.io/part-of: iku
 spec:
-  replicas: 1
+  replicas: 2
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: iku-public-site
@@ -70,8 +73,18 @@ spec:
         app.kubernetes.io/part-of: iku
     spec:
       automountServiceAccountToken: false
-      nodeSelector:
-        kubernetes.io/hostname: vps-4e5174e4
+      tolerations:
+        - key: homelab.role
+          operator: Equal
+          value: fallback
+          effect: NoSchedule
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: iku-public-site
+              topologyKey: kubernetes.io/hostname
       securityContext:
         runAsNonRoot: true
         runAsUser: 101
