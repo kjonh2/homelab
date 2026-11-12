@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { ArrowRight, LockKeyhole } from "lucide-react";
+import { ArrowRight, LockKeyhole, ShieldCheck, UserRound, MonitorSmartphone, Activity, Download, FileClock, Settings2, KeyRound } from "lucide-react";
 import { PreviewNotice } from "@/components/iku/portal-shell";
 import { ServiceCards } from "@/components/iku/service-cards";
 import { sectionBySlug } from "@/lib/portal-sections";
@@ -34,12 +34,34 @@ export default async function SectionPage({ params }: { params: Promise<{ sectio
   }
 
   const admin = slug === "admin";
+  let session = null;
+  if (["profile", "devices", "sessions", "security", "settings", "admin"].includes(slug)) {
+    try { session = await getAuthSession(); } catch { session = null; }
+    if (process.env.IKU_AUTH_ENFORCE === "true" && !session) redirect("/login");
+  }
+
+  if (slug === "profile" || slug === "devices" || slug === "sessions" || slug === "security") {
+    const current = session?.session;
+    const user = session?.user;
+    const details = {
+      profile: { eyebrow: "CONTA IKU", title: "Perfil", icon: UserRound, heading: user?.email ?? "Conta não disponível", body: `Função: ${user?.roles.join(", ") || "conta"}. O portal usa autenticação local Iku.`, meta: `ID de utilizador: ${user?.id ?? "indisponível"}` },
+      devices: { eyebrow: "DISPOSITIVO ATUAL", title: "Dispositivos", icon: MonitorSmartphone, heading: current?.device_name || "Navegador atual", body: `Cliente autenticado: ${current?.client ?? "indisponível"}. A API ainda não disponibiliza a lista nem a revogação de outros dispositivos.`, meta: `Sessão: ${current?.id ?? "indisponível"}` },
+      sessions: { eyebrow: "SESSÃO ATUAL", title: "Sessões", icon: Activity, heading: current?.device_name || "Sessão do navegador", body: `Iniciada em ${current?.created_at ?? "indisponível"}. Expira em ${current?.expires_at ?? "indisponível"}. Só a sessão atual é apresentada; a API ainda não lista outras sessões.`, meta: `Cliente: ${current?.client ?? "indisponível"}` },
+      security: { eyebrow: "PROTEÇÃO DA CONTA", title: "Segurança", icon: ShieldCheck, heading: user?.mfa_enabled ? "2FA ativo" : "2FA não ativo", body: "O login do portal usa sessão Iku protegida por cookie. O primeiro administrador requer 2FA; a gestão de fatores e tokens ainda não está disponível nesta página.", meta: "Acesso às páginas privadas limitado ao tailnet Tailscale." },
+    }[slug];
+    const Icon = details.icon;
+    return <div className="section-page"><PreviewNotice /><div className="page-heading"><div><span className="eyebrow muted-eyebrow">{details.eyebrow}</span><h1>{details.title}</h1><p>Informação fornecida pela sessão autenticada atual.</p></div></div><section className="empty-panel"><div className="empty-icon"><Icon size={22} /></div><div className="empty-copy"><h2>{details.heading}</h2><p>{details.body}</p><span className="pending-line"><KeyRound size={13} /> {details.meta}</span></div></section></div>;
+  }
+
+  const comingSoon = slug === "settings" || slug === "downloads" || slug === "releases";
+  const pageIcon = slug === "settings" ? Settings2 : slug === "downloads" ? Download : slug === "releases" ? FileClock : LockKeyhole;
+  const PageIcon = pageIcon;
   return (
     <div className="section-page">
       <PreviewNotice />
       <div className="page-heading"><div><span className="eyebrow muted-eyebrow">{admin ? "ACESSO RESTRITO" : "ESPAÇO PESSOAL"}</span><h1>{section.label}</h1><p>{section.description}</p></div>{admin && <span className="status-tag pending"><LockKeyhole size={13} /> Requer autenticação</span>}</div>
-      <section className="empty-panel"><div className="empty-icon"><LockKeyhole size={22} /></div><div className="empty-copy"><h2>{admin ? "Área de administração protegida" : "Os teus dados aparecem aqui"}</h2><p>{admin ? "A verificação de sessão e de permissões ainda não está ligada. Esta pré-visualização não executa ações de administração." : "Esta página ainda não está ligada ao serviço de autenticação nem às APIs do homelab. Nenhum dado pessoal é mostrado nesta pré-visualização."}</p><span className="pending-line"><span className="status-dot" /> Backend por configurar</span></div></section>
-      <div className="setup-card"><div><span className="eyebrow muted-eyebrow">PRÓXIMO PASSO</span><h3>Ligar o serviço de identidade Iku</h3><p>O blueprint local prevê sessões seguras, 2FA, tokens por dispositivo e auditoria.</p></div><span className="setup-arrow"><ArrowRight size={18} /></span></div>
+      <section className="empty-panel"><div className="empty-icon"><PageIcon size={22} /></div><div className="empty-copy"><h2>{admin ? "Área de administração protegida" : comingSoon ? "Esta área ainda não está disponível" : "Dados desta secção ainda não disponíveis"}</h2><p>{admin ? "O acesso exige uma sessão válida e a função de administrador. Os controlos administrativos ainda não têm API implementada." : comingSoon ? "A sessão e o backend Iku estão ativos, mas ainda não existe armazenamento ou API para esta funcionalidade." : "A sessão Iku está ativa. Esta secção ainda não tem dados ligados a um serviço."}</p><span className="pending-line"><span className="status-dot" /> {admin ? "Acesso verificado; ações por implementar" : "Funcionalidade por implementar"}</span></div></section>
+      <div className="setup-card"><div><span className="eyebrow muted-eyebrow">SESSÃO</span><h3>Autenticação Iku ativa</h3><p>Login, sessão local, 2FA de administrador e permissões da área de administração estão ligados.</p></div><span className="setup-arrow"><ShieldCheck size={18} /></span></div>
     </div>
   );
 }

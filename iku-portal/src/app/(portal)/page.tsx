@@ -29,7 +29,7 @@ export default async function HomePage() {
       </section>
 
       <section className="bottom-grid">
-        <article className="info-card security-card"><div className="info-icon security-icon"><ShieldCheck size={20} /></div><div><h3>Privacidade em primeiro lugar</h3><p>O portal foi pensado para funcionar com autenticação local e acesso privado. A ligação de segurança ainda está por configurar.</p><Link className="text-link" href="/security">Ver plano de segurança <ArrowRight size={15} /></Link></div></article>
+        <article className="info-card security-card"><div className="info-icon security-icon"><ShieldCheck size={20} /></div><div><h3>Privacidade em primeiro lugar</h3><p>Acesso privado por Tailscale, sessão Iku local e 2FA na conta de administrador.</p><Link className="text-link" href="/security">Ver segurança <ArrowRight size={15} /></Link></div></article>
         <article className="info-card model-card"><div className="info-icon model-icon"><Cpu size={20} /></div><div><h3>Modelos LFM3</h3><p>O estado da API da VPS é atualizado ao carregar o painel. Troca de modelo disponível na app Iku.</p><Link className="text-link" href="/services">Abrir os serviços <ArrowRight size={15} /></Link></div></article>
       </section>
     </div>

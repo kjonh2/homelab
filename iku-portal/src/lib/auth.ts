@@ -1,6 +1,9 @@
 import { cookies } from "next/headers";
 
-export type AuthSession = { user: { id: string; email: string; roles: string[]; mfa_enabled?: boolean } };
+export type AuthSession = {
+  user: { id: string; email: string; roles: string[]; mfa_enabled?: boolean };
+  session: { id: string; client: string; device_name: string; created_at: string; expires_at: string };
+};
 
 export async function getAuthSession(): Promise<AuthSession | null> {
   const token = (await cookies()).get("iku_session")?.value;
