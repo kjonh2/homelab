@@ -84,12 +84,17 @@ function Invoke-RemoteKubectlApplyText {
     $stdoutTask = $stdoutReader.ReadLineAsync()
     $stderrTask = $stderrReader.ReadLineAsync()
     $inputBytes = $utf8.GetBytes($Content)
-    $process.StandardInput.BaseStream.Write($inputBytes, 0, $inputBytes.Length)
-    $process.StandardInput.BaseStream.Flush()
-    $process.StandardInput.Close()
+    $inputStream = $process.StandardInput.BaseStream
+    $inputTask = $inputStream.WriteAsync($inputBytes, 0, $inputBytes.Length)
+    $inputClosed = $false
 
     $deadline = [DateTime]::UtcNow.AddMinutes(5)
     while (-not $process.HasExited) {
+        if (-not $inputClosed -and $inputTask.IsCompleted) {
+            try { $inputTask.GetAwaiter().GetResult() } catch {}
+            $process.StandardInput.Close()
+            $inputClosed = $true
+        }
         if ($stdoutTask.IsCompleted) {
             $line = $stdoutTask.GetAwaiter().GetResult()
             if ($null -ne $line) {
@@ -112,6 +117,10 @@ function Invoke-RemoteKubectlApplyText {
     }
 
     $process.WaitForExit()
+    if (-not $inputClosed) {
+        try { $inputTask.GetAwaiter().GetResult() } catch {}
+        try { $process.StandardInput.Close() } catch {}
+    }
     foreach ($readerState in @(
         @{ Reader = $stdoutReader; Task = $stdoutTask; IsError = $false },
         @{ Reader = $stderrReader; Task = $stderrTask; IsError = $true }
