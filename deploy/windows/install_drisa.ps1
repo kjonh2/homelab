@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$Destination = (Join-Path $env:USERPROFILE 'workspace\drisa')
+    [string]$Destination = (Join-Path $env:USERPROFILE 'workspace\drisa'),
+    [string]$HermesHome = (Join-Path $env:LOCALAPPDATA 'hermes')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -39,7 +40,7 @@ foreach ($name in $files) {
 }
 
 $skillSource = Join-Path $source 'skills'
-$hermesSkills = Join-Path $env:USERPROFILE '.hermes\skills'
+$hermesSkills = Join-Path $HermesHome 'skills'
 foreach ($skillName in @('drisa-context-management', 'drisa-docker-mcp')) {
     $skillFile = Join-Path (Join-Path $skillSource $skillName) 'SKILL.md'
     if (-not (Test-Path -LiteralPath $skillFile -PathType Leaf)) {
@@ -51,5 +52,6 @@ foreach ($skillName in @('drisa-context-management', 'drisa-docker-mcp')) {
 }
 
 Write-Host "Updated Drisa runtime source at $Destination. Existing credentials and runtime configuration were left in place."
+Write-Host "Installed Drisa skills at $hermesSkills."
 Write-Host "Install listener dependencies with: `$env:USERPROFILE\workspace\drisa\venv\Scripts\python.exe -m pip install -r `"$source\requirements-drisa-listener.txt`""
 Write-Host "Register or refresh logon recovery with: powershell -ExecutionPolicy Bypass -File `"$Destination\register_drisa_watchdog.ps1`""
