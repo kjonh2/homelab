@@ -210,6 +210,7 @@ class DrisaVoiceActivity : AppCompatActivity() {
                         "model_operation" -> runOnUiThread { showModelOperation(message) }
                         "transcript" -> runOnUiThread { appendMessage("Tu", message.optString("text")) }
                         "reply" -> runOnUiThread { appendMessage("Drisa", message.optString("text")) }
+                        "audio_error" -> runOnUiThread { setStatus(message.optString("message", "Áudio inválido.")) }
                         "tts" -> playReply(message.optString("audio_b64"))
                     }
                 } catch (_: Exception) {

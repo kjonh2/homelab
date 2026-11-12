@@ -13,8 +13,10 @@ Config: gateway_config.json (port, allowlist, policies por dispositivo)
 """
 import asyncio
 import base64
+import binascii
 import json
 import os
+import secrets
 import subprocess
 import tempfile
 import threading
@@ -35,6 +37,9 @@ CONFIG_PATH = BASE / "gateway_config.json"
 TOKEN_PATH = BASE / "gateway_token.txt"
 BRIDGE_TEXT = BASE / "drisa_text.tmp"
 BRIDGE_RESP = BASE / "drisa_response.tmp"
+MAX_AUDIO_BYTES = 6 * 1024 * 1024
+MAX_AUDIO_BASE64_CHARS = ((MAX_AUDIO_BYTES + 2) // 3) * 4
+MAX_WEBSOCKET_MESSAGE_BYTES = 8 * 1024 * 1024
 
 RECORDINGS.mkdir(exist_ok=True)
 VAULT.mkdir(parents=True, exist_ok=True)
@@ -267,6 +272,25 @@ def _recording_device_slug(device_id: str) -> str:
     return safe or "unknown"
 
 
+def decode_audio_payload(encoded: object) -> bytes:
+    """Decode one bounded base64 RIFF/WAVE payload from the Android client."""
+    if not isinstance(encoded, str) or len(encoded) > MAX_AUDIO_BASE64_CHARS:
+        raise ValueError("audio payload too large or invalid")
+    try:
+        audio = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("audio payload is not valid base64") from exc
+    if (
+        len(audio) > MAX_AUDIO_BYTES
+        or len(audio) < 12
+        or audio[:4] != b"RIFF"
+        or audio[8:12] != b"WAVE"
+        or int.from_bytes(audio[4:8], "little") != len(audio) - 8
+    ):
+        raise ValueError("audio payload is not a bounded RIFF/WAVE file")
+    return audio
+
+
 def _auth_headers():
     cfg = _unsloth_cfg()
     headers = {"Content-Type": "application/json"}
@@ -478,13 +502,16 @@ async def handle_client(ws):
             msg = json.loads(raw)
         except Exception:
             continue
+        if not isinstance(msg, dict):
+            continue
 
         mtype = msg.get("type")
 
         if mtype == "hello":
             device_id = str(msg.get("device_id", "unknown"))[:64]
             user = str(msg.get("user", device_id))[:64]
-            if msg.get("token") != token:
+            candidate = msg.get("token")
+            if not isinstance(candidate, str) or not secrets.compare_digest(candidate, token):
                 log_to_obsidian(device_id, user, "TENTATIVA COM TOKEN INVÁLIDO", "SECURITY")
                 await ws.send(json.dumps({"type": "auth", "ok": False, "reason": "token"}))
                 continue
@@ -526,12 +553,13 @@ async def handle_client(ws):
 
         if mtype == "audio" and msg.get("audio_b64"):
             ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-            wav_path = RECORDINGS / f"{ts}_{_recording_device_slug(device_id)}.wav"
             try:
-                wav_path.write_bytes(base64.b64decode(msg["audio_b64"]))
-            except Exception as e:
-                print(f"[audio] erro a gravar: {e}")
+                audio = decode_audio_payload(msg["audio_b64"])
+            except ValueError:
+                await ws.send(json.dumps({"type": "audio_error", "message": "Áudio inválido ou demasiado grande."}, ensure_ascii=False))
                 continue
+            wav_path = RECORDINGS / f"{ts}_{_recording_device_slug(device_id)}_{secrets.token_hex(4)}.wav"
+            wav_path.write_bytes(audio)
 
             pol = cfg["policies"].get(device_id, cfg["unknown"]) if authed else cfg["unknown"]
             text = ""
@@ -570,7 +598,14 @@ async def main():
     # Tailscale Serve forwards to loopback; keep the gateway off LAN interfaces.
     print(f"[gateway] Drisa Voice Gateway a ouvir em 127.0.0.1:{port}")
     print(f"[gateway] vault: {VAULT}")
-    async with websockets.serve(handle_client, "127.0.0.1", port, max_size=64 * 1024 * 1024):
+    async with websockets.serve(
+        handle_client,
+        "127.0.0.1",
+        port,
+        max_size=MAX_WEBSOCKET_MESSAGE_BYTES,
+        ping_interval=20,
+        ping_timeout=20,
+    ):
         await asyncio.Future()
 
 
