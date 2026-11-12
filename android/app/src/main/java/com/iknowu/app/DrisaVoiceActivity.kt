@@ -111,7 +111,7 @@ class DrisaVoiceActivity : AppCompatActivity() {
             setPadding(0, dp(10), 0, dp(4))
         }
         endpoint = EditText(this).apply {
-            hint = "wss://iknowu.tailnet.ts.net/"
+            hint = "wss://iknowu.tail2931da.ts.net/"
             setSingleLine(true)
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
         }
