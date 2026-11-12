@@ -114,7 +114,7 @@ powershell -ExecutionPolicy Bypass -File C:\Users\kjonh\workspace\drisa\drisa_mo
 powershell -ExecutionPolicy Bypass -File C:\Users\kjonh\workspace\drisa\drisa_mode.ps1 normal
 ```
 
-Gaming mode stops the local Unsloth model server and 3D world while retaining the microphone listener and voice gateway. It selects local Whisper.cpp transcription, Windows PT-PT speech, and the VPS LFM3 router using model ID `lfm3-omni`. The mode is prepared but not activated. The VPS and laptop routes are private to the tailnet; the phone app still needs a final on-device check. The homelab is registered as a tainted K3s fallback worker; current workloads remain on the VPS.
+Gaming mode stops the local Unsloth model server and 3D world while retaining the microphone listener and voice gateway. It selects local Whisper.cpp transcription, Windows PT-PT speech, and the VPS LFM3 router while preserving the selected text model from `gateway_config.json` (currently `lfm3-uncensored`). The mode is prepared but not active; the laptop is currently in normal mode. The Redmi app displays the loaded laptop model and the private WebSocket route is reachable. A live spoken-audio/TTS conversation remains to be verified. The homelab is registered as a tainted K3s fallback worker; current workloads remain on the VPS.
 
 After restarting the K3s server on the VPS, verify the `iku-portal-forward`, `iku-n8n-forward`, `iku-nextcloud-forward`, and `iku-lfm3-forward` systemd units. Restart them if inactive:
 
