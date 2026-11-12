@@ -41,8 +41,8 @@ if ($gamingMode) {
         $unsloth = Get-Command unsloth -ErrorAction SilentlyContinue
         if (-not $unsloth) { $unsloth = Get-Command unsloth.cmd -ErrorAction SilentlyContinue }
         if ($unsloth) {
-            Start-Process -FilePath $unsloth.Source -ArgumentList @('studio', '-p', '8888') -WindowStyle Hidden
-            Write-DrisaLog 'Normal mode selected; Unsloth model server launch requested.'
+            Start-Process -FilePath $unsloth.Source -ArgumentList @('studio', '-H', '127.0.0.1', '-p', '8888', '--no-cloudflare') -WindowStyle Hidden
+            Write-DrisaLog 'Normal mode selected; loopback-only Unsloth model server launch requested.'
         } else {
             Write-DrisaLog 'Normal mode selected; Unsloth command not found, model server was not started.'
         }

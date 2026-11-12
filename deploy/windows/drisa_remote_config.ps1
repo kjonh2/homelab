@@ -10,12 +10,26 @@ function Set-DrisaGamingEnvironment {
 
 function Get-DrisaGamingModelServerProcesses {
     $unslothRoot = Join-Path $env:USERPROFILE '.unsloth'
-    Get-CimInstance Win32_Process | Where-Object {
-        $name = [string]$_.Name
-        $path = [string]$_.ExecutablePath
+    $processes = @(Get-CimInstance Win32_Process)
+    $serverIds = New-Object 'System.Collections.Generic.HashSet[int]'
+    foreach ($process in $processes) {
+        $path = [string]$process.ExecutablePath
         $insideUnsloth = $path.StartsWith($unslothRoot + '\', [StringComparison]::OrdinalIgnoreCase)
-        $insideUnsloth -and $name -match '^(?i:unsloth|llama-server)\.exe$'
+        if ($insideUnsloth -and ([string]$process.Name) -match '^(?i:unsloth|llama-server|python)\.exe$') {
+            [void]$serverIds.Add([int]$process.ProcessId)
+        }
     }
+    $changed = $true
+    while ($changed) {
+        $changed = $false
+        foreach ($process in $processes) {
+            if ($serverIds.Contains([int]$process.ParentProcessId) -and
+                $serverIds.Add([int]$process.ProcessId)) {
+                $changed = $true
+            }
+        }
+    }
+    $processes | Where-Object { $serverIds.Contains([int]$_.ProcessId) }
 }
 
 function Stop-DrisaGamingModelServer {
