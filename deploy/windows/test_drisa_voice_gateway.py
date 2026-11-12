@@ -69,6 +69,36 @@ class AudioPayloadTests(unittest.TestCase):
         ):
             self.assertEqual(gateway.llm_reply(utterance), "")
 
+    def test_transcript_is_posted_to_selected_lfm_chat_endpoint(self):
+        import requests
+
+        transcript = "Explica o estado do servidor."
+        reply = "O servidor está ligado e a funcionar."
+
+        class FakeResponse:
+            @staticmethod
+            def raise_for_status():
+                return None
+
+            @staticmethod
+            def json():
+                return {"choices": [{"message": {"content": reply}}]}
+
+        with (
+            patch.object(gateway, "_unsloth_cfg", return_value={
+                "llm_model": "lfm3-uncensored",
+                "llm_url": "https://vps.example/v1",
+                "llm_key": "test-key",
+            }),
+            patch.object(requests, "post", return_value=FakeResponse()) as post,
+        ):
+            self.assertEqual(gateway.llm_reply(transcript), reply)
+
+        args, kwargs = post.call_args
+        self.assertEqual(args[0], "https://vps.example/v1/chat/completions")
+        self.assertEqual(kwargs["json"]["model"], "lfm3-uncensored")
+        self.assertEqual(kwargs["json"]["messages"][-1], {"role": "user", "content": transcript})
+
 
 class GatewayAsyncAudioTests(unittest.IsolatedAsyncioTestCase):
     async def test_slow_inference_does_not_block_websocket_event_loop(self):
@@ -119,8 +149,8 @@ class GatewayAsyncAudioTests(unittest.IsolatedAsyncioTestCase):
             patch.object(gateway, "load_config", return_value=config),
             patch.object(gateway, "load_token", return_value="test-token"),
             patch.object(gateway, "transcribe", side_effect=lambda _: slow("hello")),
-            patch.object(gateway, "llm_reply", side_effect=lambda _: slow("reply")),
-            patch.object(gateway, "tts_kokoro", side_effect=lambda _: slow(b"wav")),
+            patch.object(gateway, "llm_reply", side_effect=lambda _: slow("reply")) as llm,
+            patch.object(gateway, "tts_kokoro", side_effect=lambda _: slow(b"wav")) as tts,
             patch.object(gateway, "log_to_obsidian"),
             patch.object(gateway, "send_to_drisa"),
         ):
@@ -131,6 +161,8 @@ class GatewayAsyncAudioTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertGreaterEqual(ticks, 5)
         self.assertEqual([message["type"] for message in socket.sent], ["auth", "transcript", "reply", "tts"])
+        llm.assert_called_once_with("hello")
+        tts.assert_called_once_with("reply")
 
 
 def tearDownModule():
