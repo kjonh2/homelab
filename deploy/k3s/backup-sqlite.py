@@ -2,30 +2,27 @@
 
 from __future__ import annotations
 
-import glob
 import sqlite3
 import sys
 from pathlib import Path
-from urllib.parse import quote
 
 
 DATABASES = {
-    "iku-auth": "/source/storage/pvc-*_iku_iku-auth-data/auth.sqlite3",
-    "n8n": "/source/storage/pvc-*_iku_n8n-data/database.sqlite",
+    "iku-auth": "/source/auth-db/auth.sqlite3",
+    "n8n": "/source/n8n-db/database.sqlite",
     "nextcloud": "/source/nextcloud-db/owncloud.db",
-    "k3s-state": "/source/k3s-server/db/state.db",
+    "k3s-state": "/source/k3s-db/state.db",
 }
 OUTPUT = Path("/sqlite-backups")
 
 
 def snapshot(name: str, pattern: str) -> None:
-    matches = glob.glob(pattern)
-    if len(matches) != 1:
-        raise RuntimeError(f"Expected one {name} database; found {len(matches)}")
+    source_path = Path(pattern)
+    if not source_path.is_file():
+        raise RuntimeError(f"Expected {name} database at {source_path}")
 
-    source_path = Path(matches[0])
-    print(f"Snapshot starting: {name}")
-    source_uri = f"file:{quote(str(source_path), safe='/')}?mode=ro"
+    print(f"Snapshot starting: {name}", flush=True)
+    source_uri = f"file:{source_path.as_posix()}?mode=ro"
     output_path = OUTPUT / f"{name}.sqlite3"
     try:
         source_connection = sqlite3.connect(source_uri, uri=True, timeout=60)
@@ -53,8 +50,11 @@ def snapshot(name: str, pattern: str) -> None:
 def main() -> int:
     OUTPUT.mkdir(parents=True, exist_ok=True)
     try:
-        for name, pattern in DATABASES.items():
-            snapshot(name, pattern)
+        names = sys.argv[1:] or list(DATABASES)
+        for name in names:
+            if name not in DATABASES:
+                raise RuntimeError(f"Unknown SQLite database: {name}")
+            snapshot(name, DATABASES[name])
     except Exception as exc:
         print(f"SQLite backup preparation failed: {exc}", file=sys.stderr)
         return 1

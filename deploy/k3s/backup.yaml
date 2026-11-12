@@ -253,11 +253,14 @@ spec:
                 - name: storage
                   mountPath: /source/storage
                   readOnly: true
+                - name: auth-db
+                  mountPath: /source/auth-db
+                - name: n8n-db
+                  mountPath: /source/n8n-db
                 - name: nextcloud-db
                   mountPath: /source/nextcloud-db
-                - name: k3s-server
-                  mountPath: /source/k3s-server
-                  readOnly: true
+                - name: k3s-db
+                  mountPath: /source/k3s-db
                 - name: sqlite-backups
                   mountPath: /sqlite-backups
                 - name: script
@@ -280,6 +283,7 @@ spec:
                     - ALL
                   add:
                     - DAC_READ_SEARCH
+                    - DAC_OVERRIDE
           containers:
             - name: restic
               image: restic/restic:0.19.1
@@ -352,12 +356,25 @@ spec:
               hostPath:
                 path: /var/lib/rancher/k3s/storage
                 type: Directory
+            - name: auth-db
+              hostPath:
+                path: /var/lib/rancher/k3s/storage/pvc-0df6a381-ded4-495e-858e-ae7fd8751222_iku_iku-auth-data
+                type: Directory
+            - name: n8n-db
+              hostPath:
+                path: /var/lib/rancher/k3s/storage/pvc-0b822a9d-cdaf-4755-89e0-088068322123_iku_n8n-data
+                type: Directory
             - name: k3s-server
               hostPath:
                 path: /var/lib/rancher/k3s/server
                 type: Directory
+            - name: k3s-db
+              hostPath:
+                path: /var/lib/rancher/k3s/server/db
+                type: Directory
             # SQLite WAL mode needs a writable shm lock file. The init container
-            # opens owncloud.db with mode=ro; only this PVC mount is writable.
+            # opens each database with mode=ro and mounts only database directories
+            # read-write; all other source trees stay read-only.
             - name: nextcloud-db
               hostPath:
                 path: /var/lib/rancher/k3s/storage/pvc-be0f54f4-c7ff-4a52-9dfa-491998581a26_iku_nextcloud-data-v2
