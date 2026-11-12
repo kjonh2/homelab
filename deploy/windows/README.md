@@ -26,4 +26,4 @@ The gateway records voice content in the configured Obsidian vault and recording
 
 ## Gaming mode
 
-Copy `drisa_mode.ps1` and `drisa_remote_config.ps1` into `%USERPROFILE%\workspace\drisa`. Run `powershell -ExecutionPolicy Bypass -File $env:USERPROFILE\workspace\drisa\drisa_mode.ps1 gaming` to stop local model serving and the 3D world while keeping the gateway and microphone listener available; language-model requests go to the private VPS endpoint. Use `normal` to restore local serving and the 3D world.
+Copy `drisa_mode.ps1`, `drisa_remote_config.ps1`, `drisa_watchdog.ps1`, and `register_drisa_watchdog.ps1` into `%USERPROFILE%\workspace\drisa`. Run `powershell -ExecutionPolicy Bypass -File $env:USERPROFILE\workspace\drisa\register_drisa_watchdog.ps1` once to start the gateway and the selected voice listener at logon and check them every minute while the user is signed in. Run `drisa_mode.ps1 gaming` to stop local model serving and the 3D world while keeping the gateway and microphone listener available; language-model requests go to the private VPS endpoint. Use `drisa_mode.ps1 normal` to restore local serving and the 3D world.
