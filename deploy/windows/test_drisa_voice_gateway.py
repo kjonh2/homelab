@@ -1,14 +1,19 @@
+import asyncio
 import base64
+import json
 import os
 import struct
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 _TEST_ROOT = tempfile.TemporaryDirectory(prefix="drisa-gateway-test-")
 os.environ["DRISA_HOME"] = _TEST_ROOT.name
 os.environ["DRISA_VAULT_PATH"] = str(Path(_TEST_ROOT.name) / "vault")
 
+import drisa_voice_gateway as gateway
 from drisa_voice_gateway import MAX_AUDIO_BYTES, decode_audio_payload
 
 
@@ -39,6 +44,69 @@ class AudioPayloadTests(unittest.TestCase):
         encoded = "A" * (((MAX_AUDIO_BYTES + 2) // 3) * 4 + 4)
         with self.assertRaises(ValueError):
             decode_audio_payload(encoded)
+
+
+class GatewayAsyncAudioTests(unittest.IsolatedAsyncioTestCase):
+    async def test_slow_inference_does_not_block_websocket_event_loop(self):
+        wav = b"RIFF" + struct.pack("<I", 4) + b"WAVE"
+        config = {
+            "allowlist": ["test-device"],
+            "policies": {"test-device": {"transcribe": True, "reply": True}},
+            "unknown": {"transcribe": False, "reply": False},
+        }
+
+        class FakeWebSocket:
+            remote_address = "test"
+
+            def __init__(self):
+                self.messages = iter([
+                    json.dumps({"type": "hello", "device_id": "test-device", "token": "test-token"}),
+                    json.dumps({"type": "audio", "audio_b64": base64.b64encode(wav).decode("ascii")}),
+                ])
+                self.sent = []
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                try:
+                    return next(self.messages)
+                except StopIteration:
+                    raise StopAsyncIteration
+
+            async def send(self, message):
+                self.sent.append(json.loads(message))
+
+        def slow(value):
+            time.sleep(0.08)
+            return value
+
+        socket = FakeWebSocket()
+        ticks = 0
+        finished = asyncio.Event()
+
+        async def heartbeat():
+            nonlocal ticks
+            while not finished.is_set():
+                ticks += 1
+                await asyncio.sleep(0.01)
+
+        with (
+            patch.object(gateway, "load_config", return_value=config),
+            patch.object(gateway, "load_token", return_value="test-token"),
+            patch.object(gateway, "transcribe", side_effect=lambda _: slow("hello")),
+            patch.object(gateway, "llm_reply", side_effect=lambda _: slow("reply")),
+            patch.object(gateway, "tts_kokoro", side_effect=lambda _: slow(b"wav")),
+            patch.object(gateway, "log_to_obsidian"),
+            patch.object(gateway, "send_to_drisa"),
+        ):
+            heartbeat_task = asyncio.create_task(heartbeat())
+            await asyncio.wait_for(gateway.handle_client(socket), timeout=2)
+            finished.set()
+            await heartbeat_task
+
+        self.assertGreaterEqual(ticks, 5)
+        self.assertEqual([message["type"] for message in socket.sent], ["auth", "transcript", "reply", "tts"])
 
 
 def tearDownModule():
