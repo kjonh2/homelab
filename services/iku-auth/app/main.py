@@ -32,6 +32,9 @@ SESSION_COOKIE = "iku_session"
 WEB_SESSION_TTL = 8 * 60 * 60
 ACCESS_TOKEN_TTL = 15 * 60
 REFRESH_TOKEN_TTL = 30 * 24 * 60 * 60
+API_TOKEN_TTL_DAYS_DEFAULT = 90
+API_TOKEN_TTL_DAYS_MAX = 365
+API_TOKEN_SCOPES = {"profile:read", "sessions:read", "sessions:revoke"}
 FIREBASE_CERTS_URL = "https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com"
 LOGIN_WINDOW = 15 * 60
 LOGIN_FAILURE_LIMIT = 10
@@ -100,6 +103,16 @@ class LogoutInput(StrictModel):
 
 class SessionRevokeInput(StrictModel):
     session_id: str = Field(min_length=32, max_length=64, pattern="^[a-f0-9]+$")
+
+
+class ApiTokenCreateInput(StrictModel):
+    name: str = Field(min_length=1, max_length=80)
+    scopes: list[str] = Field(min_length=1, max_length=3)
+    expires_in_days: int = Field(default=API_TOKEN_TTL_DAYS_DEFAULT, ge=1, le=API_TOKEN_TTL_DAYS_MAX)
+
+
+class ApiTokenRevokeInput(StrictModel):
+    token_id: str = Field(min_length=32, max_length=64, pattern="^[a-f0-9]+$")
 
 
 class FirebaseExchangeInput(StrictModel):
@@ -204,6 +217,7 @@ def init_db() -> None:
                 id TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 name TEXT NOT NULL,
+                token_prefix TEXT NOT NULL DEFAULT '',
                 token_hash TEXT NOT NULL UNIQUE,
                 scopes_json TEXT NOT NULL,
                 created_at INTEGER NOT NULL,
@@ -237,6 +251,11 @@ def init_db() -> None:
             PRAGMA user_version=1;
             """
         )
+        token_columns = {row["name"] for row in db.execute("PRAGMA table_info(api_tokens)").fetchall()}
+        if "token_prefix" not in token_columns:
+            db.execute("ALTER TABLE api_tokens ADD COLUMN token_prefix TEXT NOT NULL DEFAULT ''")
+        db.execute("CREATE INDEX IF NOT EXISTS api_tokens_user_idx ON api_tokens(user_id, revoked_at, expires_at)")
+        db.commit()
         try:
             os.chmod(DB_PATH, 0o600)
         except OSError:
@@ -486,14 +505,39 @@ def load_user_for_token(db: sqlite3.Connection, request: Request) -> tuple[sqlit
         return None
     now = utc_now()
     row = db.execute(
-        "SELECT s.*,u.email,u.disabled FROM sessions s JOIN users u ON u.id=s.user_id "
+        "SELECT s.*,u.email,u.disabled,'session' AS credential_type,'[]' AS scopes_json FROM sessions s JOIN users u ON u.id=s.user_id "
         "WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>?",
+        (digest_token(token), now),
+    ).fetchone()
+    if row and not row["disabled"]:
+        return row, row, token
+    row = db.execute(
+        "SELECT t.id,t.user_id,t.name AS device_name,'api' AS client,NULL AS refresh_family,t.created_at,t.expires_at,"
+        "COALESCE(t.last_used_at,t.created_at) AS last_seen_at,t.revoked_at,t.token_hash,t.scopes_json,"
+        "u.email,u.disabled,'api_token' AS credential_type "
+        "FROM api_tokens t JOIN users u ON u.id=t.user_id "
+        "WHERE t.token_hash=? AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at>?)",
         (digest_token(token), now),
     ).fetchone()
     if not row or row["disabled"]:
         return None
-    roles = db.execute("SELECT role FROM user_roles WHERE user_id=? ORDER BY role", (row["user_id"],)).fetchall()
     return row, row, token
+
+
+def require_scope(credential: sqlite3.Row, scope: str) -> None:
+    if credential["credential_type"] != "api_token":
+        return
+    try:
+        scopes = json.loads(credential["scopes_json"])
+    except (TypeError, json.JSONDecodeError):
+        scopes = []
+    if scope not in scopes:
+        raise HTTPException(status_code=403, detail="scope_required")
+
+
+def require_session_credential(credential: sqlite3.Row) -> None:
+    if credential["credential_type"] != "session":
+        raise HTTPException(status_code=403, detail="session_required")
 
 
 def issue_session(db: sqlite3.Connection, user: sqlite3.Row, client: str, device_name: str, ip: str) -> dict[str, Any]:
@@ -786,6 +830,113 @@ def firebase_exchange(body: FirebaseExchangeInput, request: Request) -> dict[str
         db.close()
 
 
+@app.get("/v1/auth/api-tokens")
+def list_api_tokens(request: Request) -> dict[str, Any]:
+    db = connect()
+    try:
+        loaded = load_user_for_token(db, request)
+        if not loaded:
+            raise HTTPException(status_code=401, detail="not_authenticated")
+        current, _, _ = loaded
+        require_session_credential(current)
+        rows = db.execute(
+            "SELECT id,name,token_prefix,scopes_json,created_at,expires_at,last_used_at FROM api_tokens "
+            "WHERE user_id=? AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 100",
+            (current["user_id"],),
+        ).fetchall()
+        return {
+            "tokens": [
+                {
+                    "id": row["id"], "name": row["name"], "prefix": row["token_prefix"],
+                    "scopes": json.loads(row["scopes_json"]), "created_at": iso_time(row["created_at"]),
+                    "expires_at": iso_time(row["expires_at"]) if row["expires_at"] is not None else None,
+                    "last_used_at": iso_time(row["last_used_at"]) if row["last_used_at"] else None,
+                    "expired": row["expires_at"] is not None and row["expires_at"] <= utc_now(),
+                }
+                for row in rows
+            ]
+        }
+    finally:
+        db.close()
+
+
+@app.post("/v1/auth/api-tokens")
+def create_api_token(body: ApiTokenCreateInput, request: Request) -> dict[str, Any]:
+    is_browser_session = not request.headers.get("authorization", "").lower().startswith("bearer ")
+    verify_origin(request, required=is_browser_session)
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="invalid_token_name")
+    if len(set(body.scopes)) != len(body.scopes) or not set(body.scopes).issubset(API_TOKEN_SCOPES):
+        raise HTTPException(status_code=422, detail="invalid_token_scopes")
+    db = connect()
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        loaded = load_user_for_token(db, request)
+        if not loaded:
+            raise HTTPException(status_code=401, detail="not_authenticated")
+        current, _, _ = loaded
+        require_session_credential(current)
+        roles = [row["role"] for row in db.execute("SELECT role FROM user_roles WHERE user_id=?", (current["user_id"],)).fetchall()]
+        factor = db.execute("SELECT enabled FROM mfa_factors WHERE user_id=?", (current["user_id"],)).fetchone()
+        if "admin" in roles and (not factor or not factor["enabled"]):
+            raise HTTPException(status_code=403, detail="mfa_setup_required")
+        now = utc_now()
+        token = "iku_" + secrets.token_urlsafe(32)
+        token_id = secrets.token_hex(16)
+        expires_at = now + body.expires_in_days * 24 * 60 * 60
+        scopes = sorted(body.scopes)
+        db.execute(
+            "INSERT INTO api_tokens(id,user_id,name,token_prefix,token_hash,scopes_json,created_at,expires_at) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (token_id, current["user_id"], name[:80], token[:12], digest_token(token), json.dumps(scopes), now, expires_at),
+        )
+        audit(db, current["user_id"], "auth.api_token.create", "success", current["client"], request_ip(request))
+        db.commit()
+        return {
+            "token": token,
+            "api_token": {
+                "id": token_id, "name": name[:80], "prefix": token[:12], "scopes": scopes,
+                "created_at": iso_time(now), "expires_at": iso_time(expires_at), "last_used_at": None,
+            },
+        }
+    except Exception:
+        if db.in_transaction:
+            db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+@app.post("/v1/auth/api-tokens/revoke")
+def revoke_api_token(body: ApiTokenRevokeInput, request: Request) -> dict[str, bool]:
+    is_browser_session = not request.headers.get("authorization", "").lower().startswith("bearer ")
+    verify_origin(request, required=is_browser_session)
+    db = connect()
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        loaded = load_user_for_token(db, request)
+        if not loaded:
+            raise HTTPException(status_code=401, detail="not_authenticated")
+        current, _, _ = loaded
+        require_session_credential(current)
+        cursor = db.execute(
+            "UPDATE api_tokens SET revoked_at=? WHERE id=? AND user_id=? AND revoked_at IS NULL",
+            (utc_now(), body.token_id, current["user_id"]),
+        )
+        if cursor.rowcount != 1:
+            raise HTTPException(status_code=404, detail="api_token_not_found")
+        audit(db, current["user_id"], "auth.api_token.revoke", "success", current["client"], request_ip(request))
+        db.commit()
+        return {"revoked": True}
+    except Exception:
+        if db.in_transaction:
+            db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 @app.get("/v1/auth/session")
 def session(request: Request) -> dict[str, Any]:
     db = connect()
@@ -794,10 +945,14 @@ def session(request: Request) -> dict[str, Any]:
         if not loaded:
             raise HTTPException(status_code=401, detail="not_authenticated")
         session_row, _, _ = loaded
+        require_scope(session_row, "profile:read")
         user = db.execute("SELECT id,email FROM users WHERE id=?", (session_row["user_id"],)).fetchone()
         roles = [r["role"] for r in db.execute("SELECT role FROM user_roles WHERE user_id=? ORDER BY role", (user["id"],)).fetchall()]
         factor = db.execute("SELECT enabled FROM mfa_factors WHERE user_id=?", (user["id"],)).fetchone()
-        db.execute("UPDATE sessions SET last_seen_at=? WHERE id=?", (utc_now(), session_row["id"]))
+        if session_row["credential_type"] == "api_token":
+            db.execute("UPDATE api_tokens SET last_used_at=? WHERE id=?", (utc_now(), session_row["id"]))
+        else:
+            db.execute("UPDATE sessions SET last_seen_at=? WHERE id=?", (utc_now(), session_row["id"]))
         db.commit()
         return {
             "user": {"id": user["id"], "email": user["email"], "roles": roles, "mfa_enabled": bool(factor and factor["enabled"])},
@@ -819,6 +974,7 @@ def list_sessions(request: Request) -> dict[str, Any]:
         if not loaded:
             raise HTTPException(status_code=401, detail="not_authenticated")
         current, _, _ = loaded
+        require_scope(current, "sessions:read")
         now = utc_now()
         rows = db.execute(
             "SELECT id,client,device_name,created_at,expires_at,last_seen_at FROM sessions "
@@ -826,7 +982,7 @@ def list_sessions(request: Request) -> dict[str, Any]:
             "ORDER BY last_seen_at DESC LIMIT 50",
             (current["user_id"], now),
         ).fetchall()
-        return {
+        result = {
             "sessions": [
                 {
                     "id": row["id"], "client": row["client"], "device_name": row["device_name"],
@@ -836,6 +992,10 @@ def list_sessions(request: Request) -> dict[str, Any]:
                 for row in rows
             ]
         }
+        if current["credential_type"] == "api_token":
+            db.execute("UPDATE api_tokens SET last_used_at=? WHERE id=?", (utc_now(), current["id"]))
+            db.commit()
+        return result
     finally:
         db.close()
 
@@ -851,6 +1011,7 @@ def revoke_session(body: SessionRevokeInput, request: Request, response: Respons
         if not loaded:
             raise HTTPException(status_code=401, detail="not_authenticated")
         current, _, _ = loaded
+        require_scope(current, "sessions:revoke")
         target = db.execute(
             "SELECT id,user_id,refresh_family,client FROM sessions WHERE id=? AND user_id=? "
             "AND revoked_at IS NULL AND expires_at>?",
@@ -942,7 +1103,10 @@ def logout(request: Request, response: Response, body: LogoutInput | None = None
             now = utc_now()
             if refresh_row and session_row["refresh_family"] != refresh_row["family_id"]:
                 raise HTTPException(status_code=400, detail="session_token_mismatch")
-            db.execute("UPDATE sessions SET revoked_at=? WHERE id=?", (now, session_row["id"]))
+            if session_row["credential_type"] == "api_token":
+                db.execute("UPDATE api_tokens SET revoked_at=? WHERE id=? AND revoked_at IS NULL", (now, session_row["id"]))
+            else:
+                db.execute("UPDATE sessions SET revoked_at=? WHERE id=?", (now, session_row["id"]))
             family_id = session_row["refresh_family"]
             user_id = session_row["user_id"]
         elif refresh_row:
@@ -956,7 +1120,8 @@ def logout(request: Request, response: Response, body: LogoutInput | None = None
             db.execute("UPDATE refresh_tokens SET revoked_at=? WHERE family_id=? AND revoked_at IS NULL", (now, family_id))
             db.execute("UPDATE sessions SET revoked_at=? WHERE refresh_family=? AND revoked_at IS NULL", (now, family_id))
         if user_id:
-            audit(db, user_id, "auth.logout", "success", "android" if family_id else "web", request_ip(request))
+            client = "api" if loaded and session_row["credential_type"] == "api_token" else "android" if family_id else "web"
+            audit(db, user_id, "auth.logout", "success", client, request_ip(request))
             db.commit()
         response.delete_cookie(SESSION_COOKIE, path="/", secure=True, httponly=True, samesite="strict")
         response.status_code = 204

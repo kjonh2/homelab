@@ -223,6 +223,137 @@ class AuthServiceTests(unittest.TestCase):
         finally:
             other_client.close()
 
+    def test_api_tokens_are_hash_only_scoped_expiring_and_revocable(self) -> None:
+        self.enable_mfa()
+        self.next_totp_window()
+        web_login = self.login()
+        created = self.client.post(
+            "/v1/auth/api-tokens",
+            headers={"Origin": "https://portal.test"},
+            json={
+                "name": "  backup integration  ",
+                "scopes": ["profile:read", "sessions:read", "sessions:revoke"],
+                "expires_in_days": 30,
+            },
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        secret = created.json()["token"]
+        token_info = created.json()["api_token"]
+        self.assertTrue(secret.startswith("iku_"))
+        self.assertEqual(token_info["name"], "backup integration")
+        self.assertEqual(token_info["prefix"], secret[:12])
+        self.assertEqual(token_info["scopes"], ["profile:read", "sessions:read", "sessions:revoke"])
+        self.assertNotIn(secret, created.json()["api_token"].values())
+
+        db = main.connect()
+        try:
+            stored = db.execute("SELECT * FROM api_tokens WHERE id=?", (token_info["id"],)).fetchone()
+            self.assertEqual(stored["token_hash"], main.digest_token(secret))
+            self.assertNotEqual(stored["token_hash"], secret)
+            self.assertEqual(stored["token_prefix"], secret[:12])
+            self.assertEqual(stored["expires_at"] - stored["created_at"], 30 * 24 * 60 * 60)
+        finally:
+            db.close()
+
+        listed = self.client.get("/v1/auth/api-tokens")
+        self.assertEqual(listed.status_code, 200, listed.text)
+        self.assertEqual([item["id"] for item in listed.json()["tokens"]], [token_info["id"]])
+        self.assertNotIn("token_hash", listed.json()["tokens"][0])
+        self.assertNotIn("token", listed.json()["tokens"][0])
+
+        headers = {"Authorization": f"Bearer {secret}"}
+        profile = self.client.get("/v1/auth/session", headers=headers)
+        self.assertEqual(profile.status_code, 200, profile.text)
+        self.assertEqual(profile.json()["session"]["client"], "api")
+        self.assertEqual(self.client.get("/v1/auth/sessions", headers=headers).status_code, 200)
+
+        self.next_totp_window()
+        android = self.login(client="android").json()
+        revoke_session = self.client.post(
+            "/v1/auth/sessions/revoke",
+            headers=headers,
+            json={"session_id": android["session"]["id"]},
+        )
+        self.assertEqual(revoke_session.status_code, 200, revoke_session.text)
+        self.assertEqual(revoke_session.json(), {"revoked": True, "current": False})
+        self.assertEqual(self.client.get("/v1/auth/session", headers={"Authorization": f"Bearer {android['access_token']}"}).status_code, 401)
+
+        revoked = self.client.post(
+            "/v1/auth/api-tokens/revoke",
+            headers={"Origin": "https://portal.test"},
+            json={"token_id": token_info["id"]},
+        )
+        self.assertEqual(revoked.status_code, 200, revoked.text)
+        self.assertEqual(self.client.get("/v1/auth/session", headers=headers).status_code, 401)
+        self.assertEqual(self.client.get("/v1/auth/api-tokens").json()["tokens"], [])
+
+    def test_api_tokens_reject_unknown_scopes_and_cannot_manage_tokens(self) -> None:
+        self.enable_mfa()
+        self.next_totp_window()
+        self.login()
+        missing_origin = self.client.post("/v1/auth/api-tokens", json={"name": "integration", "scopes": ["profile:read"]})
+        self.assertEqual(missing_origin.status_code, 403)
+        invalid_scope = self.client.post(
+            "/v1/auth/api-tokens",
+            headers={"Origin": "https://portal.test"},
+            json={"name": "integration", "scopes": ["admin:*"], "expires_in_days": 30},
+        )
+        self.assertEqual(invalid_scope.status_code, 422)
+        duplicate_scope = self.client.post(
+            "/v1/auth/api-tokens",
+            headers={"Origin": "https://portal.test"},
+            json={"name": "integration", "scopes": ["profile:read", "profile:read"], "expires_in_days": 30},
+        )
+        self.assertEqual(duplicate_scope.status_code, 422)
+
+        created = self.client.post(
+            "/v1/auth/api-tokens",
+            headers={"Origin": "https://portal.test"},
+            json={"name": "profile reader", "scopes": ["profile:read"], "expires_in_days": 30},
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        headers = {"Authorization": f"Bearer {created.json()['token']}"}
+        self.assertEqual(self.client.get("/v1/auth/session", headers=headers).status_code, 200)
+        self.assertEqual(self.client.get("/v1/auth/sessions", headers=headers).status_code, 403)
+        self.assertEqual(self.client.post("/v1/auth/api-tokens", headers=headers, json={"name": "nested", "scopes": ["profile:read"]}).status_code, 403)
+        self.assertEqual(self.client.post("/v1/auth/sessions/revoke", headers=headers, json={"session_id": "a" * 32}).status_code, 403)
+        self.assertEqual(self.client.post("/v1/auth/logout", headers=headers).status_code, 204)
+        self.assertEqual(self.client.get("/v1/auth/session", headers=headers).status_code, 401)
+
+    def test_api_token_cannot_revoke_another_users_token(self) -> None:
+        self.enable_mfa()
+        self.next_totp_window()
+        self.login()
+        created = self.client.post(
+            "/v1/auth/api-tokens",
+            headers={"Origin": "https://portal.test"},
+            json={"name": "admin token", "scopes": ["profile:read"], "expires_in_days": 30},
+        )
+        now = main.utc_now()
+        other_user_id = "other-api-user"
+        db = main.connect()
+        try:
+            db.execute(
+                "INSERT INTO users(id,email,password_hash,created_at,updated_at) VALUES(?,?,?,?,?)",
+                (other_user_id, "other-api@example.test", main.hash_password("another secure test password"), now, now),
+            )
+            db.execute("INSERT INTO user_roles(user_id,role) VALUES(?,?)", (other_user_id, "user"))
+            db.execute(
+                "INSERT INTO api_tokens(id,user_id,name,token_prefix,token_hash,scopes_json,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?)",
+                ("c" * 32, other_user_id, "other token", "iku_other00", main.digest_token("iku_other_private_value"), '["profile:read"]', now, now + 3600),
+            )
+            db.commit()
+        finally:
+            db.close()
+        response = self.client.post(
+            "/v1/auth/api-tokens/revoke",
+            headers={"Origin": "https://portal.test"},
+            json={"token_id": "c" * 32},
+        )
+        self.assertEqual(response.status_code, 404)
+        still_valid = self.client.get("/v1/auth/session", headers={"Authorization": f"Bearer {created.json()['token']}"})
+        self.assertEqual(still_valid.status_code, 200)
+
     def test_firebase_exchange_requires_admin_totp_and_issues_iku_tokens(self) -> None:
         self.enable_mfa()
         self.next_totp_window()

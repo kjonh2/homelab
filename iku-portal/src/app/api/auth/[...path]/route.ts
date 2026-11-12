@@ -5,6 +5,7 @@ export const dynamic = "force-dynamic";
 const routes = new Map<string, string>([
   ["GET session", "session"],
   ["GET sessions", "sessions"],
+  ["GET api-tokens", "api-tokens"],
   ["POST bootstrap", "bootstrap"],
   ["POST bootstrap/verify-mfa", "bootstrap/verify-mfa"],
   ["POST firebase/exchange", "firebase/exchange"],
@@ -12,6 +13,8 @@ const routes = new Map<string, string>([
   ["POST refresh", "refresh"],
   ["POST logout", "logout"],
   ["POST sessions/revoke", "sessions/revoke"],
+  ["POST api-tokens", "api-tokens"],
+  ["POST api-tokens/revoke", "api-tokens/revoke"],
 ]);
 
 function sessionCookie(request: NextRequest): string | undefined {
