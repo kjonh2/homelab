@@ -2,6 +2,7 @@ package com.iknowu.app
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaPlayer
@@ -45,6 +46,8 @@ class DrisaVoiceActivity : AppCompatActivity() {
     private var socket: WebSocket? = null
     private var authenticated = false
     private var recorder: AudioRecord? = null
+    private var replyPlayer: MediaPlayer? = null
+    private var replyAudioFile: File? = null
     private var recordThread: Thread? = null
     private val recording = AtomicBoolean(false)
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -298,19 +301,53 @@ class DrisaVoiceActivity : AppCompatActivity() {
     }
 
     private fun playReply(encoded: String) {
-        try {
-            val audioFile = File(cacheDir, "drisa-reply.wav")
-            FileOutputStream(audioFile).use { it.write(Base64.decode(encoded, Base64.DEFAULT)) }
-            runOnUiThread {
-                val player = MediaPlayer()
-                player.setOnCompletionListener { it.release(); audioFile.delete() }
-                player.setOnErrorListener { mp, _, _ -> mp.release(); audioFile.delete(); true }
+        val audioFile = try {
+            val file = File.createTempFile("drisa-reply-", ".wav", cacheDir)
+            FileOutputStream(file).use { it.write(Base64.decode(encoded, Base64.DEFAULT)) }
+            file
+        } catch (_: Exception) {
+            runOnUiThread { setStatus("Recebi a resposta, mas não consegui preparar o áudio.") }
+            return
+        }
+
+        runOnUiThread {
+            replyPlayer?.let { previous ->
+                try { if (previous.isPlaying) previous.stop() } catch (_: Exception) { }
+                previous.release()
+            }
+            replyAudioFile?.delete()
+            val player = MediaPlayer()
+            replyPlayer = player
+            replyAudioFile = audioFile
+            try {
+                player.setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build()
+                )
+                player.setOnPreparedListener { it.start() }
+                player.setOnCompletionListener { releaseReplyPlayer(it, audioFile) }
+                player.setOnErrorListener { mp, _, _ ->
+                    releaseReplyPlayer(mp, audioFile)
+                    setStatus("Recebi a resposta, mas não consegui reproduzir o áudio.")
+                    true
+                }
                 player.setDataSource(audioFile.absolutePath)
                 player.prepareAsync()
-                player.setOnPreparedListener { it.start() }
+            } catch (_: Exception) {
+                releaseReplyPlayer(player, audioFile)
+                setStatus("Recebi a resposta, mas não consegui reproduzir o áudio.")
             }
-        } catch (_: Exception) {
-            runOnUiThread { setStatus("Recebi a resposta, mas não consegui reproduzir o áudio.") }
+        }
+    }
+
+    private fun releaseReplyPlayer(player: MediaPlayer, audioFile: File) {
+        try { player.release() } catch (_: Exception) { }
+        audioFile.delete()
+        if (replyPlayer === player) {
+            replyPlayer = null
+            replyAudioFile = null
         }
     }
 
@@ -435,6 +472,13 @@ class DrisaVoiceActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         disconnect()
+        replyPlayer?.let { player ->
+            try { if (player.isPlaying) player.stop() } catch (_: Exception) { }
+            player.release()
+        }
+        replyPlayer = null
+        replyAudioFile?.delete()
+        replyAudioFile = null
         client.dispatcher.executorService.shutdown()
         super.onDestroy()
     }
