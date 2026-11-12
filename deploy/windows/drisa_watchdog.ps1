@@ -15,6 +15,31 @@ if (-not (Test-Path -LiteralPath $modeConfig)) {
 }
 if (Test-Path -LiteralPath $modeConfig) { . $modeConfig }
 
+function Set-DrisaRuntimeEnvironment([bool]$GamingMode) {
+    $configPath = Join-Path $drisaDir 'gateway_config.json'
+    $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+    $env:DRISA_HOME = $drisaDir
+    $env:DRISA_VAULT_PATH = Join-Path $env:USERPROFILE 'Documents\Obsidian Vault\Drisa\Voice Gateway'
+    $env:DRISA_UNSLOTH_URL = if ($config.unsloth_url) { $config.unsloth_url } else { 'http://127.0.0.1:8888/v1' }
+    $env:DRISA_STT_ENGINE = if ($config.stt_engine) { $config.stt_engine } else { 'api' }
+    $env:DRISA_TTS_ENGINE = if ($config.tts_engine) { $config.tts_engine } else { 'api' }
+    $env:DRISA_STT_MODEL = if ($config.stt_model) { $config.stt_model } else { 'audio-cpp/audio.cpp-gguf/MOSS-Transcribe-Diarize-GGUF' }
+    $env:DRISA_STT_FALLBACK_MODEL = if ($config.fallback_stt_model) { $config.fallback_stt_model } else { 'audio-cpp/audio.cpp-gguf/Parakeet-TDT-0.6B-v3-GGUF' }
+    $env:DRISA_LLM_MODEL = if ($config.llm_model) { $config.llm_model } else { 'AtomicChat/LFM3-1.7B-Uncensored-GGUF' }
+    $env:DRISA_LLM_HOST = if ($config.llm_host) { $config.llm_host } else { 'pc' }
+    if ($config.llm_url) { $env:DRISA_LLM_URL = $config.llm_url }
+    $env:DRISA_TTS_MODEL = if ($config.tts_model) { $config.tts_model } else { 'audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF' }
+    $env:DRISA_TTS_VOICE = if ($config.tts_voice) { $config.tts_voice } else { 'pf_dora' }
+
+    $keyPath = Join-Path $drisaDir 'unsloth.key'
+    if (Test-Path -LiteralPath $keyPath) {
+        $env:DRISA_UNSLOTH_KEY = (Get-Content -LiteralPath $keyPath -Raw).Trim()
+    }
+    if ($GamingMode -and (Get-Command Set-DrisaGamingEnvironment -ErrorAction SilentlyContinue)) {
+        Set-DrisaGamingEnvironment
+    }
+}
+
 function Write-DrisaWatchdogLog([string]$Message) {
     $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
     "[$timestamp] Watchdog: $Message" | Out-File -FilePath $logFile -Encoding utf8 -Append
@@ -64,6 +89,7 @@ function Ensure-DrisaProcess([string]$ScriptPath, [string]$PidFile, [string]$Nam
 try {
     $gamingMode = (Test-Path -LiteralPath $modeFile) -and
         ((Get-Content -LiteralPath $modeFile -Raw).Trim().ToLowerInvariant() -eq 'gaming')
+    Set-DrisaRuntimeEnvironment $gamingMode
     if ($gamingMode) {
         if (Get-Command Stop-DrisaGamingModelServer -ErrorAction SilentlyContinue) {
             Stop-DrisaGamingModelServer

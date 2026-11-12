@@ -559,23 +559,25 @@ async def handle_client(ws):
                 await ws.send(json.dumps({"type": "audio_error", "message": "Áudio inválido ou demasiado grande."}, ensure_ascii=False))
                 continue
             wav_path = RECORDINGS / f"{ts}_{_recording_device_slug(device_id)}_{secrets.token_hex(4)}.wav"
-            wav_path.write_bytes(audio)
+            await asyncio.to_thread(wav_path.write_bytes, audio)
 
             pol = cfg["policies"].get(device_id, cfg["unknown"]) if authed else cfg["unknown"]
             text = ""
             if pol.get("transcribe"):
-                text = transcribe(wav_path)
+                # STT, LLM and TTS calls are synchronous and can take over a minute.
+                # Keep them off the event loop so websocket ping/pong stays responsive.
+                text = await asyncio.to_thread(transcribe, wav_path)
                 if text:
-                    log_to_obsidian(device_id, user, text)
+                    await asyncio.to_thread(log_to_obsidian, device_id, user, text)
                     await ws.send(json.dumps({"type": "transcript", "text": text, "file": wav_path.name}))
 
             if pol.get("reply") and text:
-                send_to_drisa(text, user)
-                reply = llm_reply(text)
+                await asyncio.to_thread(send_to_drisa, text, user)
+                reply = await asyncio.to_thread(llm_reply, text)
                 if reply:
-                    log_to_obsidian(device_id, user, reply, "drisa")
+                    await asyncio.to_thread(log_to_obsidian, device_id, user, reply, "drisa")
                     await ws.send(json.dumps({"type": "reply", "text": reply}))
-                    audio = tts_kokoro(reply)
+                    audio = await asyncio.to_thread(tts_kokoro, reply)
                     if audio:
                         await ws.send(json.dumps({
                             "type": "tts", "audio_b64": base64.b64encode(audio).decode(),
