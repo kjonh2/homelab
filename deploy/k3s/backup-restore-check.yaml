@@ -1,0 +1,145 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: iku-backup-restore-check
+  namespace: iku-backup
+  labels:
+    app.kubernetes.io/name: iku-backup-client
+    app.kubernetes.io/part-of: iku
+spec:
+  schedule: "17 5 1 * *"
+  timeZone: Europe/Paris
+  suspend: false
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 86400
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    metadata:
+      labels:
+        app.kubernetes.io/name: iku-backup-client
+        app.kubernetes.io/part-of: iku
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 7200
+      ttlSecondsAfterFinished: 604800
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: iku-backup-client
+            app.kubernetes.io/part-of: iku
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          nodeSelector:
+            kubernetes.io/hostname: vps-4e5174e4
+          securityContext:
+            seccompProfile:
+              type: RuntimeDefault
+          initContainers:
+            - name: restore
+              image: restic/restic:0.19.1
+              imagePullPolicy: IfNotPresent
+              command: ["/bin/sh", "-ec"]
+              args:
+                - |
+                  restic restore latest --target /restore \
+                    --include /sqlite-backups/iku-auth.sqlite3 \
+                    --include /sqlite-backups/n8n.sqlite3 \
+                    --include /sqlite-backups/nextcloud.sqlite3 \
+                    --include /sqlite-backups/k3s-state.sqlite3
+              env:
+                - name: RESTIC_REPOSITORY
+                  value: rest:http://iku-backup-server.iku-backup.svc.cluster.local:8000/iku-backup
+                - name: RESTIC_REST_USERNAME
+                  value: iku-backup
+                - name: RESTIC_REST_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: iku-backup-credentials
+                      key: rest-server-password
+                - name: RESTIC_PASSWORD_FILE
+                  value: /run/secrets/backup/restic-password
+                - name: HOME
+                  value: /tmp
+              volumeMounts:
+                - name: credentials
+                  mountPath: /run/secrets/backup
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+                - name: restore
+                  mountPath: /restore
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  cpu: 1000m
+                  memory: 1Gi
+              securityContext:
+                runAsUser: 0
+                runAsGroup: 0
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+                  add: ["CHOWN"]
+          containers:
+            - name: verify
+              image: python:3.12-alpine
+              imagePullPolicy: IfNotPresent
+              command: ["python3", "-c"]
+              args:
+                - |
+                  import pathlib, sqlite3
+                  root = pathlib.Path('/restore/sqlite-backups')
+                  for name in ('iku-auth', 'n8n', 'nextcloud', 'k3s-state'):
+                      path = root / f'{name}.sqlite3'
+                      if not path.is_file() or path.stat().st_size == 0:
+                          raise SystemExit(f'Missing or empty restored database: {path}')
+                      # The restored copies are immutable snapshots; this also
+                      # allows read-only validation of WAL-mode databases.
+                      db = sqlite3.connect(f'file:{path}?mode=ro&immutable=1', uri=True)
+                      try:
+                          result = db.execute('PRAGMA integrity_check').fetchone()
+                      finally:
+                          db.close()
+                      if not result or result[0] != 'ok':
+                          raise SystemExit(f'SQLite integrity check failed: {name}: {result}')
+                      print(f'Restored SQLite integrity check: {name}: ok', flush=True)
+              volumeMounts:
+                - name: restore
+                  mountPath: /restore
+                  readOnly: true
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+              securityContext:
+                runAsUser: 0
+                runAsGroup: 0
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+                  add: ["DAC_READ_SEARCH"]
+          volumes:
+            - name: credentials
+              secret:
+                secretName: iku-backup-credentials
+                defaultMode: 0440
+                items:
+                  - key: rest-server-password
+                    path: rest-server-password
+                  - key: restic-password
+                    path: restic-password
+            - name: tmp
+              emptyDir:
+                sizeLimit: 256Mi
+            - name: restore
+              emptyDir:
+                sizeLimit: 8Gi
