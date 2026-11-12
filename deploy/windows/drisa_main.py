@@ -682,78 +682,92 @@ class DrisaAssistant:
             if not gemini:
                 logger.info("Gemini CLI unavailable; trying the configured local LLM")
 
-            # Try LOCAL LLM first (unsloth server neste PC — zero custo, zero OpenRouter)
+            # Honor the selected model host; try the other private host if it cannot answer.
             try:
                 import json as _json
                 import urllib.request
 
                 llm_cfg = self.config.get("llm", {})
-                base_url = os.environ.get("DRISA_UNSLOTH_URL", llm_cfg.get("base_url", "http://127.0.0.1:8888/v1")).rstrip("/")
-                key = os.environ.get("DRISA_UNSLOTH_KEY", "").strip()
                 model = os.environ.get("DRISA_LLM_MODEL", llm_cfg.get("model", "AtomicChat/LFM3-1.7B-Uncensored-GGUF"))
                 max_tokens = int(os.environ.get("DRISA_LLM_MAX_TOKENS", llm_cfg.get("max_tokens", 150)))
                 temperature = float(os.environ.get("DRISA_LLM_TEMPERATURE", llm_cfg.get("temperature", 0.7)))
+                local_url = os.environ.get(
+                    "DRISA_UNSLOTH_URL", llm_cfg.get("base_url", "http://127.0.0.1:8888/v1")
+                ).rstrip("/")
+                local_key = os.environ.get("DRISA_UNSLOTH_KEY", "").strip()
+                if not local_key:
+                    local_key_path = DRISA_HOME / "unsloth.key"
+                    if local_key_path.is_file():
+                        local_key = local_key_path.read_text(encoding="utf-8").strip()
 
-                payload = _json.dumps({
-                    "model": model,
-                    "messages": [
-                        {"role": "system", "content": (
-                            "Tu és a Drisa, uma assistente de voz amigável e entusiasta. "
-                            "O teu nome é Drisa (diminutivo de Adriana). "
-                            "Falas com o Kiko, o teu utilizador. "
-                            "Responde de forma natural, direta e em português de Portugal. "
-                            "Dá apenas a resposta final, curta, natural e pronta para ser dita em voz alta pelo Kokoro. "
-                            "Não mostres raciocínio, análise, passos internos, etiquetas ou markdown. "
-                            "Não uses emojis. Se não souberes, dizes."
-                        )},
-                        {"role": "user", "content": text}
-                    ],
-                    "max_tokens": max_tokens,
-                    "temperature": temperature
-                }).encode("utf-8")
+                vps_url = os.environ.get("DRISA_LLM_URL", "").strip().rstrip("/")
+                vps_key = os.environ.get("DRISA_LLM_KEY", "").strip()
+                if not vps_key:
+                    vps_key_path = DRISA_HOME / "iku_lfm3.key"
+                    if vps_key_path.is_file():
+                        vps_key = vps_key_path.read_text(encoding="utf-8").strip()
 
-                headers = {"Content-Type": "application/json"}
-                if key:
-                    headers["Authorization"] = f"Bearer {key}"
-                req = urllib.request.Request(
-                    f"{base_url}/chat/completions",
-                    data=payload,
-                    headers=headers
+                selected_host = os.environ.get("DRISA_LLM_HOST", "pc").strip().lower()
+                providers = (
+                    [("VPS", vps_url, vps_key), ("PC", local_url, local_key)]
+                    if selected_host == "vps"
+                    else [("PC", local_url, local_key), ("VPS", vps_url, vps_key)]
                 )
-                with urllib.request.urlopen(req, timeout=60) as resp:
-                    data = _json.loads(resp.read().decode("utf-8"))
+                system_prompt = (
+                    "Tu és a Drisa, uma assistente de voz amigável e entusiasta. "
+                    "O teu nome é Drisa (diminutivo de Adriana). "
+                    "Falas com o Kiko, o teu utilizador. "
+                    "Responde de forma natural, direta e em português de Portugal. "
+                    "Dá apenas a resposta final, curta, natural e pronta para ser dita em voz alta pelo Kokoro. "
+                    "Não mostres raciocínio, análise, passos internos, etiquetas ou markdown. "
+                    "Não uses emojis. Se não souberes, dizes."
+                )
+                seen_urls = set()
+                for provider_name, base_url, key in providers:
+                    if not base_url or base_url in seen_urls:
+                        continue
+                    seen_urls.add(base_url)
+                    headers = {"Content-Type": "application/json"}
+                    if key:
+                        headers["Authorization"] = f"Bearer {key}"
 
-                response = prepare_spoken_text(data["choices"][0]["message"]["content"])
-                if not response or is_utterance_echo(text, response):
-                    retry_payload = _json.loads(payload)
-                    retry_payload["max_tokens"] = min(max_tokens * 2, 400)
-                    logger.warning("Unsloth returned no clean answer; retrying with a larger output budget")
-                    retry_req = urllib.request.Request(
-                        f"{base_url}/chat/completions",
-                        data=_json.dumps(retry_payload).encode("utf-8"),
-                        headers=headers,
-                    )
-                    with urllib.request.urlopen(retry_req, timeout=60) as retry_resp:
-                        retry_data = _json.loads(retry_resp.read().decode("utf-8"))
-                    response = prepare_spoken_text(retry_data["choices"][0]["message"]["content"])
-                if is_utterance_echo(text, response):
-                    logger.warning("Unsloth LLM echoed the utterance; ignoring the response")
-                    response = ""
-                if response:
-                    logger.info(f"Local LLM response: '{response}'")
-                    try:
-                        with open(DRISA_HOME / "drisa_response.tmp", "w", encoding="utf-8") as f:
-                            f.write(response)
-                    except Exception as e:
-                        logger.error(f"Failed to write response bridge: {e}")
-                    self._gemini_processing = False
-                    return response
-                logger.warning("Unsloth LLM returned empty response")
+                    for output_budget in (max_tokens, min(max_tokens * 2, 400)):
+                        payload = _json.dumps({
+                            "model": model,
+                            "messages": [
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": text},
+                            ],
+                            "max_tokens": output_budget,
+                            "temperature": temperature,
+                        }).encode("utf-8")
+                        try:
+                            req = urllib.request.Request(
+                                f"{base_url}/chat/completions", data=payload, headers=headers
+                            )
+                            with urllib.request.urlopen(req, timeout=60) as resp:
+                                data = _json.loads(resp.read().decode("utf-8"))
+                            response = prepare_spoken_text(data["choices"][0]["message"]["content"])
+                            if response and not is_utterance_echo(text, response):
+                                logger.info("LLM response received from %s", provider_name)
+                                try:
+                                    with open(DRISA_HOME / "drisa_response.tmp", "w", encoding="utf-8") as f:
+                                        f.write(response)
+                                except Exception as e:
+                                    logger.error(f"Failed to write response bridge: {e}")
+                                self._gemini_processing = False
+                                return response
+                            logger.warning(
+                                "%s returned no clean answer with output budget %s",
+                                provider_name, output_budget,
+                            )
+                        except Exception as e:
+                            logger.warning("%s LLM request failed (%s)", provider_name, type(e).__name__)
             except Exception as e:
-                logger.warning(f"Unsloth LLM failed: {e}")
+                logger.warning("LLM provider setup failed (%s)", type(e).__name__)
 
             if os.environ.get("DRISA_LLM_FALLBACK", "").strip().lower() not in ("1", "true", "yes", "gemini"):
-                logger.warning("Unsloth LLM failed, Gemini fallback disabled")
+                logger.warning("All configured LLM hosts failed; Gemini fallback disabled")
                 self._gemini_processing = False
                 return self._simple_response(text, language)
 

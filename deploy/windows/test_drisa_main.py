@@ -98,6 +98,75 @@ class DrisaFallbackTests(unittest.TestCase):
         self.assertEqual(response, "Liga os teus dispositivos através de uma rede privada.")
         self.assertEqual(request.call_count, 2)
 
+    def test_selected_vps_is_used_before_local_pc(self):
+        assistant = object.__new__(DrisaAssistant)
+        assistant.config = {"llm": {"model": "test-model"}}
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            @staticmethod
+            def read():
+                return json.dumps({"choices": [{"message": {"content": "Estou a ouvir, Kiko."}}]}).encode()
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch("shutil.which", return_value=None), \
+                patch("urllib.request.urlopen", return_value=FakeResponse()) as request, \
+                patch.dict(os.environ, {
+                    "DRISA_LLM_HOST": "vps",
+                    "DRISA_LLM_URL": "https://vps.example/v1",
+                    "DRISA_LLM_KEY": "test-vps-key",
+                    "DRISA_UNSLOTH_URL": "http://127.0.0.1:8888/v1",
+                    "DRISA_UNSLOTH_KEY": "",
+                    "DRISA_LLM_FALLBACK": "",
+                }), patch("drisa_main.DRISA_HOME", Path(temp_dir)):
+            response = assistant.process_command("Olá", "pt")
+
+        self.assertEqual(response, "Estou a ouvir, Kiko.")
+        self.assertEqual(request.call_count, 1)
+        self.assertTrue(request.call_args.args[0].full_url.startswith("https://vps.example/v1/"))
+
+    def test_selected_vps_falls_back_to_pc_after_empty_vps_retries(self):
+        assistant = object.__new__(DrisaAssistant)
+        assistant.config = {"llm": {"model": "test-model"}}
+
+        class FakeResponse:
+            def __init__(self, content):
+                self.content = content
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return json.dumps({"choices": [{"message": {"content": self.content}}]}).encode()
+
+        def response_by_host(request, timeout):
+            if request.full_url.startswith("https://vps.example/"):
+                return FakeResponse("")
+            return FakeResponse("Posso ajudar com isso.")
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch("shutil.which", return_value=None), \
+                patch("urllib.request.urlopen", side_effect=response_by_host) as request, \
+                patch.dict(os.environ, {
+                    "DRISA_LLM_HOST": "vps",
+                    "DRISA_LLM_URL": "https://vps.example/v1",
+                    "DRISA_LLM_KEY": "test-vps-key",
+                    "DRISA_UNSLOTH_URL": "http://127.0.0.1:8888/v1",
+                    "DRISA_UNSLOTH_KEY": "",
+                    "DRISA_LLM_FALLBACK": "",
+                }), patch("drisa_main.DRISA_HOME", Path(temp_dir)):
+            response = assistant.process_command("O que podes fazer?", "pt")
+
+        self.assertEqual(response, "Posso ajudar com isso.")
+        self.assertEqual(request.call_count, 3)
+        self.assertTrue(request.call_args.args[0].full_url.startswith("http://127.0.0.1:8888/v1/"))
+
 
 if __name__ == "__main__":
     unittest.main()
