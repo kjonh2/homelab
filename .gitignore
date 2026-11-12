@@ -33,6 +33,8 @@ node_modules/
 .next/
 out/
 coverage/
+public-site/dist/
+*.tsbuildinfo
 
 # Android build outputs and local configuration
 **/build/
