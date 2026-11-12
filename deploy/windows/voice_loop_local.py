@@ -52,6 +52,10 @@ _AUDIO_MODEL_ALIASES = {
 def _normalize_audio_model(value, default):
     key = str(value or default).strip().lower()
     return _AUDIO_MODEL_ALIASES.get(key, key)
+
+def _model_for_endpoint(value, default, endpoint):
+    selected = str(value or default).strip()
+    return _normalize_audio_model(selected, default) if endpoint.rstrip("/") == AUDIO_URL else selected
 _remote_llm_url = os.environ.get("DRISA_LLM_URL", "").strip()
 LLM_URL = (_remote_llm_url or BASE_URL).rstrip("/")
 LLM_KEY = os.environ.get("DRISA_LLM_KEY", "").strip()
@@ -113,9 +117,9 @@ def audio_autosave_tick(chunk_bytes, force=False):
         except OSError: pass
 
 LLM_MODEL = os.environ.get("DRISA_LLM_MODEL", "AtomicChat/LFM3-1.7B-Uncensored-GGUF")
-STT_MODEL = _normalize_audio_model(os.environ.get("DRISA_STT_MODEL"), "moss")
-STT_FALLBACK_MODEL = _normalize_audio_model(os.environ.get("DRISA_STT_FALLBACK_MODEL"), "parakeet")
-TTS_MODEL = _normalize_audio_model(os.environ.get("DRISA_TTS_MODEL"), "kokoro")
+STT_MODEL = _model_for_endpoint(os.environ.get("DRISA_STT_MODEL"), "audio-cpp/audio.cpp-gguf/MOSS-Transcribe-Diarize-GGUF", STT_URL)
+STT_FALLBACK_MODEL = _model_for_endpoint(os.environ.get("DRISA_STT_FALLBACK_MODEL"), "audio-cpp/audio.cpp-gguf/Parakeet-TDT-0.6B-v3-GGUF", STT_URL)
+TTS_MODEL = _model_for_endpoint(os.environ.get("DRISA_TTS_MODEL"), "kokoro", TTS_URL)
 TTS_VOICE = os.environ.get("DRISA_TTS_VOICE", "pf_dora")
 WHISPER = r"C:\Whisper.Cpp\whisper-cli.exe"
 WHISPER_MODEL = r"C:\Whisper.Cpp\models\ggml-base.bin"

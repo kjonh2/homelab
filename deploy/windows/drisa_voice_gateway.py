@@ -49,8 +49,8 @@ DEFAULT_CONFIG = {
     "port": 8765,
     "stt_engine": "api",                # "api" | "whisper" | "deepgram"
     "unsloth_url": "http://127.0.0.1:8888/v1",
-    "stt_model": "moss",
-    "fallback_stt_model": "parakeet",
+    "stt_model": "audio-cpp/audio.cpp-gguf/MOSS-Transcribe-Diarize-GGUF",
+    "fallback_stt_model": "audio-cpp/audio.cpp-gguf/Parakeet-TDT-0.6B-v3-GGUF",
     "llm_model": "AtomicChat/LFM3-1.7B-Uncensored-GGUF",
     "tts_model": "kokoro",
     "tts_voice": "pf_dora",
@@ -84,10 +84,8 @@ def load_config():
     if not CONFIG_PATH.exists():
         CONFIG_PATH.write_text(json.dumps(DEFAULT_CONFIG, indent=2))
     cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    # audio.cpp serves short API IDs (moss/parakeet/kokoro), while older
-    # configs and package IDs used the downloadable model names.
-    for field, default in (("stt_model", "moss"), ("fallback_stt_model", "parakeet"), ("tts_model", "kokoro")):
-        cfg[field] = _normalize_audio_model(cfg.get(field), default)
+    # Keep the selected model IDs intact here: Unsloth expects full package IDs,
+    # while audio.cpp on the homelab expects short IDs (moss/parakeet/kokoro).
     if cfg.get("unsloth_url") == "http://127.0.0.1:8888/v1":
         cfg["unsloth_url"] = "http://127.0.0.1:8888/v1"
     return cfg
@@ -119,22 +117,34 @@ def _unsloth_cfg():
     if not llm_key and llm_host != "vps":
         llm_key = os.environ.get("DRISA_UNSLOTH_KEY", cfg.get("unsloth_key", "")).strip()
 
+    stt_url = os.environ.get("DRISA_STT_URL", cfg.get("stt_url", "")).strip().rstrip("/")
+    if not stt_url:
+        stt_url = cfg.get("audio_url", "").strip().rstrip("/") if cfg.get("stt_host") == "homelab" else llm_url
+    tts_url = os.environ.get("DRISA_TTS_URL", cfg.get("tts_url", "")).strip().rstrip("/")
+    if not tts_url:
+        tts_url = cfg.get("audio_url", "").strip().rstrip("/") if cfg.get("tts_host") == "homelab" else llm_url
+    audio_url = os.environ.get("DRISA_AUDIO_URL", cfg.get("audio_url", "")).strip().rstrip("/")
+
+    def model_id(value, default, endpoint):
+        selected = str(value or default).strip()
+        return _normalize_audio_model(selected, default) if audio_url and endpoint == audio_url else selected
+
     return {
         "base_url": os.environ.get("DRISA_UNSLOTH_URL", cfg.get("unsloth_url", "http://127.0.0.1:8888/v1")).rstrip("/"),
         "key": os.environ.get("DRISA_UNSLOTH_KEY", cfg.get("unsloth_key", "")).strip(),
         "audio_url": os.environ.get("DRISA_AUDIO_URL", cfg.get("audio_url", "")).strip().rstrip("/"),
         "audio_key": os.environ.get("DRISA_AUDIO_KEY", cfg.get("audio_key", "")).strip(),
-        "stt_url": os.environ.get("DRISA_STT_URL", cfg.get("stt_url", "")).strip().rstrip("/"),
-        "tts_url": os.environ.get("DRISA_TTS_URL", cfg.get("tts_url", "")).strip().rstrip("/"),
+        "stt_url": stt_url,
+        "tts_url": tts_url,
         "stt_key": os.environ.get("DRISA_STT_KEY", cfg.get("stt_key", "")).strip(),
         "tts_key": os.environ.get("DRISA_TTS_KEY", cfg.get("tts_key", "")).strip(),
         "llm_host": llm_host,
         "llm_url": llm_url,
         "llm_key": llm_key,
-        "stt_model": _normalize_audio_model(os.environ.get("DRISA_STT_MODEL", cfg.get("stt_model")), "moss"),
-        "fallback_stt_model": _normalize_audio_model(os.environ.get("DRISA_STT_FALLBACK_MODEL", cfg.get("fallback_stt_model")), "parakeet"),
+        "stt_model": model_id(os.environ.get("DRISA_STT_MODEL", cfg.get("stt_model")), "audio-cpp/audio.cpp-gguf/MOSS-Transcribe-Diarize-GGUF", stt_url),
+        "fallback_stt_model": model_id(os.environ.get("DRISA_STT_FALLBACK_MODEL", cfg.get("fallback_stt_model")), "audio-cpp/audio.cpp-gguf/Parakeet-TDT-0.6B-v3-GGUF", stt_url),
         "llm_model": os.environ.get("DRISA_LLM_MODEL", cfg.get("llm_model", "AtomicChat/LFM3-1.7B-Uncensored-GGUF")),
-        "tts_model": _normalize_audio_model(os.environ.get("DRISA_TTS_MODEL", cfg.get("tts_model")), "kokoro"),
+        "tts_model": model_id(os.environ.get("DRISA_TTS_MODEL", cfg.get("tts_model")), "kokoro", tts_url),
         "tts_voice": os.environ.get("DRISA_TTS_VOICE", cfg.get("tts_voice", "pf_dora")),
     }
 
@@ -270,7 +280,8 @@ def _selected_model(cfg: dict, host: str, category: str) -> str:
         return ""
     if cfg.get(f"{category}_host", "pc") != host:
         return ""
-    return str(cfg.get({"stt": "stt_model", "tts": "tts_model"}.get(category, ""), ""))
+    selected = str(cfg.get({"stt": "stt_model", "tts": "tts_model"}.get(category, ""), ""))
+    return _normalize_audio_model(selected, selected) if host == "homelab" else selected
 
 
 def model_catalog(host: str, category: str) -> dict:
@@ -308,8 +319,9 @@ def _save_model_selection(host: str, category: str, model_id: str) -> None:
             os.environ["DRISA_TTS_MODEL"] = model_id
             os.environ["DRISA_TTS_URL"] = cfg["tts_url"]
         elif category == "stt" and host == "homelab":
-            previous_model = str(cfg.get("stt_model", ""))
-            if model_id != previous_model and cfg.get("fallback_stt_model") == model_id:
+            previous_model = _normalize_audio_model(cfg.get("stt_model"), "moss")
+            fallback_model = _normalize_audio_model(cfg.get("fallback_stt_model"), "parakeet")
+            if model_id != previous_model and fallback_model == model_id:
                 cfg["fallback_stt_model"] = previous_model
                 os.environ["DRISA_STT_FALLBACK_MODEL"] = previous_model
             cfg["stt_model"] = model_id

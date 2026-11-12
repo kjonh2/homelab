@@ -261,6 +261,51 @@ class AudioPayloadTests(unittest.TestCase):
             self.assertEqual(gateway.transcribe(Path("unused.wav")), "Texto reconhecido.")
         self.assertEqual([call.args[1] for call in transcribe.call_args_list], ["moss", "parakeet"])
 
+    def test_unsloth_keeps_full_stt_package_ids(self):
+        moss = "audio-cpp/audio.cpp-gguf/MOSS-Transcribe-Diarize-GGUF"
+        parakeet = "audio-cpp/audio.cpp-gguf/Parakeet-TDT-0.6B-v3-GGUF"
+        audio_url = "http://127.0.0.1:8766/v1"
+        unsloth_url = "http://127.0.0.1:8888/v1"
+        config = {
+            "unsloth_url": unsloth_url, "llm_host": "pc", "llm_url": unsloth_url,
+            "audio_url": audio_url, "stt_url": unsloth_url, "stt_host": "pc",
+            "stt_model": moss, "fallback_stt_model": parakeet,
+            "tts_url": audio_url, "tts_host": "homelab", "tts_model": "kokoro",
+        }
+        with (
+            patch.object(gateway, "load_config", return_value=config),
+            patch.dict(os.environ, {
+                "DRISA_AUDIO_URL": audio_url, "DRISA_STT_URL": unsloth_url,
+                "DRISA_TTS_URL": audio_url, "DRISA_STT_MODEL": moss,
+                "DRISA_STT_FALLBACK_MODEL": parakeet, "DRISA_TTS_MODEL": "kokoro",
+            }),
+        ):
+            resolved = gateway._unsloth_cfg()
+
+        self.assertEqual(resolved["stt_model"], moss)
+        self.assertEqual(resolved["fallback_stt_model"], parakeet)
+        self.assertEqual(resolved["tts_model"], "kokoro")
+
+    def test_audio_cpp_uses_short_stt_ids(self):
+        audio_url = "http://127.0.0.1:8766/v1"
+        config = {
+            "unsloth_url": "http://127.0.0.1:8888/v1", "llm_host": "pc",
+            "llm_url": "http://127.0.0.1:8888/v1", "audio_url": audio_url,
+            "stt_url": audio_url, "stt_host": "homelab",
+            "stt_model": "audio-cpp/audio.cpp-gguf/MOSS-Transcribe-Diarize-GGUF",
+            "fallback_stt_model": "audio-cpp/audio.cpp-gguf/Parakeet-TDT-0.6B-v3-GGUF",
+            "tts_url": audio_url, "tts_host": "homelab", "tts_model": "kokoro",
+        }
+        with (
+            patch.object(gateway, "load_config", return_value=config),
+            patch.dict(os.environ, {"DRISA_AUDIO_URL": audio_url, "DRISA_STT_URL": audio_url,
+                                    "DRISA_TTS_URL": audio_url}),
+        ):
+            resolved = gateway._unsloth_cfg()
+
+        self.assertEqual(resolved["stt_model"], "moss")
+        self.assertEqual(resolved["fallback_stt_model"], "parakeet")
+
 
 class GatewayAsyncAudioTests(unittest.IsolatedAsyncioTestCase):
     async def test_slow_inference_does_not_block_websocket_event_loop(self):

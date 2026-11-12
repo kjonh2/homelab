@@ -24,8 +24,8 @@ function Set-DrisaRuntimeEnvironment([bool]$GamingMode) {
     $env:DRISA_AUDIO_URL = if ($config.audio_url) { $config.audio_url } else { 'http://127.0.0.1:8766/v1' }
     $env:DRISA_STT_ENGINE = if ($config.stt_engine) { $config.stt_engine } else { 'api' }
     $env:DRISA_TTS_ENGINE = if ($config.tts_engine) { $config.tts_engine } else { 'api' }
-    $env:DRISA_STT_MODEL = if ($config.stt_model) { $config.stt_model } else { 'moss' }
-    $env:DRISA_STT_FALLBACK_MODEL = if ($config.fallback_stt_model) { $config.fallback_stt_model } else { 'parakeet' }
+    $env:DRISA_STT_MODEL = if ($config.stt_model) { $config.stt_model } else { 'audio-cpp/audio.cpp-gguf/MOSS-Transcribe-Diarize-GGUF' }
+    $env:DRISA_STT_FALLBACK_MODEL = if ($config.fallback_stt_model) { $config.fallback_stt_model } else { 'audio-cpp/audio.cpp-gguf/Parakeet-TDT-0.6B-v3-GGUF' }
     $env:DRISA_STT_URL = if ($config.stt_url) { $config.stt_url } elseif ($config.stt_host -eq 'homelab') { $env:DRISA_AUDIO_URL } else { $env:DRISA_UNSLOTH_URL }
     $env:DRISA_STT_HOST = if ($config.stt_host) { $config.stt_host } else { 'pc' }
     $env:DRISA_LLM_MODEL = if ($config.llm_model) { $config.llm_model } else { 'AtomicChat/LFM3-1.7B-Uncensored-GGUF' }
