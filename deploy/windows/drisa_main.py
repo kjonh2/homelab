@@ -555,7 +555,7 @@ class DrisaAssistant:
                         return
                     
                     timestamp_iso = time.strftime("%Y-%m-%dT%H:%M:%S%z")
-                    logger.info(f"Transcription: '{transcript_text}' (confidence: {stt_result.get('confidence', 0):.2f}) @ {timestamp_iso}")
+                    logger.info(f"Transcription: '{transcript_text}' (confidence: {stt_conf:.2f}) @ {timestamp_iso}")
                     
                     # Write transcription to bridge file for C++ world
                     try:
