@@ -226,6 +226,8 @@ def tts_kokoro(texto):
             json={"model": TTS_MODEL, "input": texto, "voice": TTS_VOICE, "response_format": "wav"},
             timeout=(5, 120))
         r.raise_for_status()
+        if not r.content:
+            raise RuntimeError(f"Kokoro devolveu áudio vazio (Content-Type: {r.headers.get('Content-Type', 'ausente')})")
     tmp = os.path.join(tempfile.gettempdir(), "drisa_tts_local.wav")
     with open(tmp, "wb") as f:
         f.write(r.content)
