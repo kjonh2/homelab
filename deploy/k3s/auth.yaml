@@ -60,7 +60,7 @@ spec:
             - name: IKU_AUTH_TOTP_KEY_FILE
               value: /run/secrets/iku-auth/totp-key
             - name: IKU_AUTH_ALLOWED_ORIGINS
-              value: https://vps-4e5174e4.tail2931da.ts.net
+              value: https://app.iknowu.org,https://vps-4e5174e4.tail2931da.ts.net
             - name: IKU_FIREBASE_PROJECT_ID
               value: local-44782
             - name: IKU_OIDC_ISSUER

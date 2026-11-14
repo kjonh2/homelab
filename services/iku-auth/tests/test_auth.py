@@ -40,7 +40,7 @@ class AuthServiceTests(unittest.TestCase):
         self.env = patch.dict(os.environ, {
             "IKU_AUTH_BOOTSTRAP_TOKEN_FILE": str(self.bootstrap_file),
             "IKU_AUTH_TOTP_KEY_FILE": str(self.totp_key_file),
-            "IKU_AUTH_ALLOWED_ORIGINS": "https://portal.test",
+            "IKU_AUTH_ALLOWED_ORIGINS": "https://portal.test,https://tailnet.test",
             "IKU_OIDC_ISSUER": "https://portal.test/api/auth/oidc",
             "IKU_OIDC_CLIENT_ID": "nextcloud",
             "IKU_OIDC_CLIENT_SECRET_FILE": str(self.oidc_secret_file),
@@ -736,6 +736,18 @@ class AuthServiceTests(unittest.TestCase):
             "email": "admin@example.test", "password": "wrong password", "client": "web",
         })
         self.assertEqual(missing_origin.status_code, 403)
+        allowed_tailnet_origin = self.client.post(
+            "/v1/auth/login", headers={"Origin": "https://tailnet.test"}, json={
+                "email": "admin@example.test", "password": "correct horse battery staple", "client": "web",
+            },
+        )
+        self.assertEqual(allowed_tailnet_origin.status_code, 428)
+        rejected_origin = self.client.post(
+            "/v1/auth/login", headers={"Origin": "https://attacker.test"}, json={
+                "email": "admin@example.test", "password": "wrong password", "client": "web",
+            },
+        )
+        self.assertEqual(rejected_origin.status_code, 403)
 
         with patch.object(main, "LOGIN_FAILURE_LIMIT", 1):
             failure = self.client.post("/v1/auth/login", headers={"Origin": "https://portal.test"}, json={
