@@ -35,6 +35,24 @@ curl.exe -sS -o NUL -w '%{http_code}' --resolve app.iknowu.org:443:188.114.96.2 
 
 Expected status is `200` for both paths. The app login being public does not make authenticated portal APIs public; those still require an Iku session.
 
+### Nextcloud HTTP 500 triage
+
+On 2026-11-14, a reported Nextcloud Internal Server Error could not be reproduced: the public `/index.php/login` and `/status.php` endpoints both returned HTTP 200, the Nextcloud pod was `1/1 Running` with no restarts, and the recent container log search contained no `error`, `exception`, `critical`, or `500` entries. This only confirms the service at the time of the check; capture the failing URL and reproduce the request before attributing the cause.
+
+From the VPS, check the pod and recent application log around the failure time:
+
+```bash
+sudo k3s kubectl -n iku get pods -l app=nextcloud -o wide
+sudo k3s kubectl -n iku logs deploy/nextcloud --all-containers --since=30m --tail=300
+```
+
+From a client, check the two basic endpoints without following redirects:
+
+```powershell
+curl.exe -sS -o NUL -w 'login HTTP %{http_code}\n' https://cloud.iknowu.org/index.php/login
+curl.exe -sS -o NUL -w 'status HTTP %{http_code}\n' https://cloud.iknowu.org/status.php
+```
+
 ## Failure boundaries
 
 | Failure | Current response | Recovery boundary |
