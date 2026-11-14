@@ -16,6 +16,12 @@ class PrepareSpokenTextTests(unittest.TestCase):
             "Resposta.",
         )
 
+    def test_removes_reasoning_before_orphaned_closing_tag(self):
+        self.assertEqual(
+            prepare_spoken_text("Sistema pronto.</think>Sistema pronto."),
+            "Sistema pronto.",
+        )
+
     def test_formats_markdown_for_speech(self):
         self.assertEqual(
             prepare_spoken_text("**Olá** [Kiko](https://example.com)!"),

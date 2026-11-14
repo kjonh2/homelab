@@ -10,6 +10,11 @@ def prepare_spoken_text(value: str) -> str:
     for tag in ("think", "analysis", "reasoning"):
         text = re.sub(rf"<{tag}\b[^>]*>.*?</{tag}\s*>", " ", text, flags=re.IGNORECASE | re.DOTALL)
         text = re.sub(rf"<{tag}\b[^>]*>.*$", " ", text, flags=re.IGNORECASE | re.DOTALL)
+        closing = re.search(rf"</{tag}\s*>", text, flags=re.IGNORECASE)
+        if closing and not re.search(rf"<{tag}\b[^>]*>", text[:closing.start()], flags=re.IGNORECASE):
+            # Some LFM responses omit the opening token but still emit a closing
+            # reasoning marker. Treat everything before it as hidden reasoning.
+            text = text[closing.end():]
         text = re.sub(rf"</{tag}\s*>", " ", text, flags=re.IGNORECASE)
     text = re.sub(r"<\|[^>]+\|>", " ", text)
     text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
