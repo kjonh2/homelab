@@ -32,7 +32,9 @@ export function GoogleLoginButton({ disabled = false, onCredential }: Props) {
   const callbackRef = useRef(onCredential);
   const [config, setConfig] = useState<GoogleLoginConfig | null>(null);
   const [configLoaded, setConfigLoaded] = useState(false);
-  const [unavailable, setUnavailable] = useState(false);
+  const [configError, setConfigError] = useState<"network" | "unavailable" | null>(null);
+  const [providerUnavailable, setProviderUnavailable] = useState(false);
+  const [googleButtonReady, setGoogleButtonReady] = useState(false);
 
   callbackRef.current = onCredential;
 
@@ -40,19 +42,22 @@ export function GoogleLoginButton({ disabled = false, onCredential }: Props) {
     let active = true;
     fetch("/api/auth/google-config", { cache: "no-store" })
       .then(async (response) => {
-        if (!response.ok) throw new Error("Google sign-in is not configured");
+        if (!response.ok) {
+          setConfigError("unavailable");
+          return null;
+        }
         return await response.json() as GoogleLoginConfig & { configured: boolean };
       })
       .then((value) => {
-        if (!active) return;
+        if (!active || !value) return;
         if (!value.configured || !value.apiKey || !value.clientId || !value.projectId) {
-          setUnavailable(true);
+          setConfigError("unavailable");
           return;
         }
         setConfig(value);
       })
       .catch(() => {
-        if (active) setUnavailable(true);
+        if (active) setConfigError("network");
       })
       .finally(() => {
         if (active) setConfigLoaded(true);
@@ -64,6 +69,9 @@ export function GoogleLoginButton({ disabled = false, onCredential }: Props) {
     const element = buttonRef.current;
     if (!config || !element) return;
     let active = true;
+    const loadTimeout = window.setTimeout(() => {
+      if (active) setProviderUnavailable(true);
+    }, 10_000);
     const render = () => {
       if (!active || !window.google || !buttonRef.current) return;
       buttonRef.current.replaceChildren();
@@ -81,6 +89,13 @@ export function GoogleLoginButton({ disabled = false, onCredential }: Props) {
         width: 320,
         locale: "pt-PT",
       });
+      setProviderUnavailable(false);
+      setGoogleButtonReady(true);
+      window.clearTimeout(loadTimeout);
+    };
+    const handleScriptError = () => {
+      if (active) setProviderUnavailable(true);
+      window.clearTimeout(loadTimeout);
     };
 
     const scriptId = "google-identity-services";
@@ -89,6 +104,7 @@ export function GoogleLoginButton({ disabled = false, onCredential }: Props) {
       render();
     } else if (script) {
       script.addEventListener("load", render);
+      script.addEventListener("error", handleScriptError);
     } else {
       script = document.createElement("script");
       script.id = scriptId;
@@ -96,22 +112,33 @@ export function GoogleLoginButton({ disabled = false, onCredential }: Props) {
       script.async = true;
       script.defer = true;
       script.addEventListener("load", render);
-      script.addEventListener("error", () => setUnavailable(true), { once: true });
+      script.addEventListener("error", handleScriptError, { once: true });
       document.head.appendChild(script);
     }
 
     return () => {
       active = false;
+      window.clearTimeout(loadTimeout);
       script?.removeEventListener("load", render);
+      script?.removeEventListener("error", handleScriptError);
     };
   }, [config]);
 
   return (
     <div className="google-login" aria-busy={disabled}>
       {config && <div ref={buttonRef} className={disabled ? "google-login-button disabled" : "google-login-button"} />}
-      {!config && configLoaded && (
+      {configLoaded && !config && (
         <p className="auth-message auth-error" role="status">
-          {unavailable ? "O início de sessão Google não está configurado neste portal." : "A carregar Google…"}
+          {configError === "network"
+            ? "Não foi possível carregar a configuração do Google. Verifica a ligação e tenta novamente."
+            : "O início de sessão Google não está configurado neste portal."}
+        </p>
+      )}
+      {config && !googleButtonReady && (
+        <p className={providerUnavailable ? "auth-message auth-error" : "auth-message"} role="status">
+          {providerUnavailable
+            ? "Não foi possível carregar o início de sessão Google. Verifica a ligação ou usa o acesso local."
+            : "A carregar início de sessão Google…"}
         </p>
       )}
     </div>

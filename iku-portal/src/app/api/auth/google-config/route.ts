@@ -14,7 +14,7 @@ type GoogleServicesConfig = {
 export async function GET(): Promise<Response> {
   try {
     const configPath = process.env.IKU_FIREBASE_CONFIG_PATH ?? "/run/iku-firebase/google-services.json";
-    const config = JSON.parse(await readFile(configPath, "utf8")) as GoogleServicesConfig;
+    const config = JSON.parse(await readFile(/* turbopackIgnore: true */ configPath, "utf8")) as GoogleServicesConfig;
     const clients = config.client ?? [];
     const apiKey = clients.flatMap((client) => client.api_key ?? []).find((key) => key.current_key)?.current_key;
     const webClientId = clients.flatMap((client) => client.oauth_client ?? [])
