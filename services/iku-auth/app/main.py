@@ -134,6 +134,15 @@ class AdminUserStatusInput(StrictModel):
     disabled: bool
 
 
+class AdminOidcSubjectInput(StrictModel):
+    user_id: str = Field(min_length=32, max_length=64, pattern="^[a-f0-9]+$")
+    subject: str = Field(min_length=1, max_length=255, pattern=r"^[\x21-\x7E]+$")
+
+
+class AdminOidcSubjectClearInput(StrictModel):
+    user_id: str = Field(min_length=32, max_length=64, pattern="^[a-f0-9]+$")
+
+
 class AdminInviteRevokeInput(StrictModel):
     invite_id: str = Field(min_length=32, max_length=64, pattern="^[a-f0-9]+$")
 
@@ -300,12 +309,19 @@ def init_db() -> None:
                 token_hash TEXT PRIMARY KEY,
                 client_id TEXT NOT NULL,
                 user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                subject TEXT NOT NULL,
                 scope TEXT NOT NULL,
                 created_at INTEGER NOT NULL,
                 expires_at INTEGER NOT NULL,
                 revoked_at INTEGER
             );
             CREATE INDEX IF NOT EXISTS oidc_access_expiry_idx ON oidc_access_tokens(expires_at, revoked_at);
+            CREATE TABLE IF NOT EXISTS oidc_subject_mappings (
+                user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                subject TEXT NOT NULL UNIQUE,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
             INSERT OR IGNORE INTO roles(name) VALUES ('admin'), ('server'), ('user'), ('api');
             PRAGMA user_version=1;
             """
@@ -313,6 +329,9 @@ def init_db() -> None:
         token_columns = {row["name"] for row in db.execute("PRAGMA table_info(api_tokens)").fetchall()}
         if "token_prefix" not in token_columns:
             db.execute("ALTER TABLE api_tokens ADD COLUMN token_prefix TEXT NOT NULL DEFAULT ''")
+        oidc_token_columns = {row["name"] for row in db.execute("PRAGMA table_info(oidc_access_tokens)").fetchall()}
+        if "subject" not in oidc_token_columns:
+            db.execute("ALTER TABLE oidc_access_tokens ADD COLUMN subject TEXT")
         db.execute("CREATE INDEX IF NOT EXISTS api_tokens_user_idx ON api_tokens(user_id, revoked_at, expires_at)")
         db.commit()
         try:
@@ -973,7 +992,8 @@ async def oidc_token(request: Request) -> Response:
     try:
         db.execute("BEGIN IMMEDIATE")
         row = db.execute(
-            "SELECT c.*,u.email FROM oidc_authorization_codes c JOIN users u ON u.id=c.user_id "
+            "SELECT c.*,u.email,m.subject AS oidc_subject FROM oidc_authorization_codes c "
+            "JOIN users u ON u.id=c.user_id LEFT JOIN oidc_subject_mappings m ON m.user_id=u.id "
             "WHERE c.code_hash=? AND u.disabled=0",
             (digest_token(code),),
         ).fetchone()
@@ -997,12 +1017,13 @@ async def oidc_token(request: Request) -> Response:
         )
         access_token = secrets.token_urlsafe(32)
         expires_at = now + OIDC_ACCESS_TTL
+        subject = row["oidc_subject"] or row["user_id"]
         db.execute(
-            "INSERT INTO oidc_access_tokens(token_hash,client_id,user_id,scope,created_at,expires_at) VALUES(?,?,?,?,?,?)",
-            (digest_token(access_token), settings["client_id"], row["user_id"], row["scope"], now, expires_at),
+            "INSERT INTO oidc_access_tokens(token_hash,client_id,user_id,subject,scope,created_at,expires_at) VALUES(?,?,?,?,?,?,?)",
+            (digest_token(access_token), settings["client_id"], row["user_id"], subject, row["scope"], now, expires_at),
         )
         claims: dict[str, Any] = {
-            "iss": settings["issuer"], "sub": row["user_id"], "aud": settings["client_id"],
+            "iss": settings["issuer"], "sub": subject, "aud": settings["client_id"],
             "iat": now, "exp": expires_at, "email": row["email"], "email_verified": False,
         }
         if "profile" in row["scope"].split():
@@ -1038,7 +1059,8 @@ def oidc_userinfo(request: Request) -> Response:
     db = connect()
     try:
         row = db.execute(
-            "SELECT a.scope,u.id,u.email FROM oidc_access_tokens a JOIN users u ON u.id=a.user_id "
+            "SELECT a.scope,a.subject,u.id,u.email,m.subject AS oidc_subject FROM oidc_access_tokens a "
+            "JOIN users u ON u.id=a.user_id LEFT JOIN oidc_subject_mappings m ON m.user_id=u.id "
             "WHERE a.token_hash=? AND a.revoked_at IS NULL AND a.expires_at>? AND u.disabled=0",
             (digest_token(token), utc_now()),
         ).fetchone()
@@ -1047,7 +1069,7 @@ def oidc_userinfo(request: Request) -> Response:
                 {"error": "invalid_token"}, status_code=401,
                 headers={"WWW-Authenticate": "Bearer", "Cache-Control": "no-store", "Pragma": "no-cache"},
             )
-        claims: dict[str, Any] = {"sub": row["id"]}
+        claims: dict[str, Any] = {"sub": row["subject"] or row["oidc_subject"] or row["id"]}
         scopes = set(row["scope"].split())
         if "email" in scopes:
             claims.update({"email": row["email"], "email_verified": False})
@@ -1444,6 +1466,74 @@ def admin_list_users(request: Request) -> dict[str, Any]:
                 for row in invites
             ],
         }
+    finally:
+        db.close()
+
+
+@app.get("/v1/auth/admin/oidc-subjects")
+def admin_list_oidc_subjects(request: Request) -> dict[str, Any]:
+    db = connect()
+    try:
+        require_admin_session(db, request)
+        rows = db.execute(
+            "SELECT user_id,subject,created_at,updated_at FROM oidc_subject_mappings ORDER BY created_at,user_id"
+        ).fetchall()
+        return {"mappings": [
+            {"user_id": row["user_id"], "subject": row["subject"],
+             "created_at": iso_time(row["created_at"]), "updated_at": iso_time(row["updated_at"])}
+            for row in rows
+        ]}
+    finally:
+        db.close()
+
+
+@app.post("/v1/auth/admin/oidc-subjects")
+def admin_set_oidc_subject(body: AdminOidcSubjectInput, request: Request) -> dict[str, Any]:
+    verify_origin(request, required=True)
+    db = connect()
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        current = require_admin_session(db, request)
+        target = db.execute("SELECT id FROM users WHERE id=? AND disabled=0", (body.user_id,)).fetchone()
+        if not target:
+            raise HTTPException(status_code=404, detail="user_not_found")
+        now = utc_now()
+        try:
+            db.execute(
+                "INSERT INTO oidc_subject_mappings(user_id,subject,created_at,updated_at) VALUES(?,?,?,?) "
+                "ON CONFLICT(user_id) DO UPDATE SET subject=excluded.subject,updated_at=excluded.updated_at",
+                (body.user_id, body.subject, now, now),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(status_code=409, detail="oidc_subject_in_use") from exc
+        audit(db, current["user_id"], "auth.oidc.subject.set", "success", "oidc", request_ip(request))
+        db.commit()
+        return {"user_id": body.user_id, "subject": body.subject}
+    except Exception:
+        if db.in_transaction:
+            db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+@app.post("/v1/auth/admin/oidc-subjects/clear")
+def admin_clear_oidc_subject(body: AdminOidcSubjectClearInput, request: Request) -> dict[str, Any]:
+    verify_origin(request, required=True)
+    db = connect()
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        current = require_admin_session(db, request)
+        cursor = db.execute("DELETE FROM oidc_subject_mappings WHERE user_id=?", (body.user_id,))
+        if cursor.rowcount != 1:
+            raise HTTPException(status_code=404, detail="oidc_subject_not_found")
+        audit(db, current["user_id"], "auth.oidc.subject.clear", "success", "oidc", request_ip(request))
+        db.commit()
+        return {"user_id": body.user_id, "cleared": True}
+    except Exception:
+        if db.in_transaction:
+            db.rollback()
+        raise
     finally:
         db.close()
 

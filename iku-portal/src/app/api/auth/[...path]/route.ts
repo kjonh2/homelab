@@ -11,6 +11,7 @@ const routes = new Map<string, string>([
   ["GET sessions", "sessions"],
   ["GET api-tokens", "api-tokens"],
   ["GET admin/users", "admin/users"],
+  ["GET admin/oidc-subjects", "admin/oidc-subjects"],
   ["POST bootstrap", "bootstrap"],
   ["POST bootstrap/verify-mfa", "bootstrap/verify-mfa"],
   ["POST firebase/exchange", "firebase/exchange"],
@@ -24,6 +25,8 @@ const routes = new Map<string, string>([
   ["POST admin/invites", "admin/invites"],
   ["POST admin/invites/revoke", "admin/invites/revoke"],
   ["POST admin/users/status", "admin/users/status"],
+  ["POST admin/oidc-subjects", "admin/oidc-subjects"],
+  ["POST admin/oidc-subjects/clear", "admin/oidc-subjects/clear"],
   ["POST invites/accept", "invites/accept"],
 ]);
 

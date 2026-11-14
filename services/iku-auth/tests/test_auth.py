@@ -812,6 +812,53 @@ class AuthServiceTests(unittest.TestCase):
         self.assertNotIn("prompt=login", return_to)
         self.assertIn("state=state-value-with-enough-entropy", return_to)
 
+    def test_admin_can_map_existing_service_uid_as_oidc_subject(self) -> None:
+        self.assertEqual(self.client.get("/v1/auth/admin/oidc-subjects").status_code, 401)
+        self.admin_login()
+        db = main.connect()
+        try:
+            admin_id = db.execute("SELECT id FROM users WHERE email='admin@example.test'").fetchone()["id"]
+        finally:
+            db.close()
+        mapping = {"user_id": admin_id, "subject": "ikuadmin"}
+        missing_origin = self.client.post("/v1/auth/admin/oidc-subjects", json=mapping)
+        self.assertEqual(missing_origin.status_code, 403)
+        saved = self.client.post(
+            "/v1/auth/admin/oidc-subjects", headers={"Origin": "https://portal.test"}, json=mapping,
+        )
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(self.client.get("/v1/auth/admin/oidc-subjects").json()["mappings"][0]["subject"], "ikuadmin")
+
+        params, verifier = self.oidc_params()
+        authorization = self.client.get("/v1/auth/oidc/authorize", params=params, follow_redirects=False)
+        code = parse_qs(urlparse(authorization.headers["location"]).query)["code"][0]
+        basic = base64.b64encode(b"nextcloud:nextcloud-oidc-test-secret-0123456789abcdef").decode("ascii")
+        token_response = self.client.post(
+            "/v1/auth/oidc/token", headers={"Authorization": f"Basic {basic}"}, data={
+                "grant_type": "authorization_code", "code": code,
+                "redirect_uri": params["redirect_uri"], "code_verifier": verifier,
+            },
+        )
+        self.assertEqual(token_response.status_code, 200, token_response.text)
+        claims = jwt.decode(
+            token_response.json()["id_token"], main.oidc_signing_key().public_key(),
+            algorithms=["RS256"], audience="nextcloud", issuer="https://portal.test/api/auth/oidc",
+            options={"verify_iat": False},
+        )
+        self.assertEqual(claims["sub"], "ikuadmin")
+        userinfo = self.client.get(
+            "/v1/auth/oidc/userinfo",
+            headers={"Authorization": f"Bearer {token_response.json()['access_token']}"},
+        )
+        self.assertEqual(userinfo.json()["sub"], "ikuadmin")
+
+        cleared = self.client.post(
+            "/v1/auth/admin/oidc-subjects/clear", headers={"Origin": "https://portal.test"},
+            json={"user_id": admin_id},
+        )
+        self.assertEqual(cleared.status_code, 200, cleared.text)
+        self.assertEqual(self.client.get("/v1/auth/admin/oidc-subjects").json()["mappings"], [])
+
     def test_oidc_authorization_code_pkce_token_and_userinfo_flow(self) -> None:
         self.admin_login()
         params, verifier = self.oidc_params()
