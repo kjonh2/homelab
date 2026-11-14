@@ -42,6 +42,8 @@ Após o reinício autorizado em 2026-11-15, `docker desktop status` voltou a `ru
 
 Follow-up em 2026-11-15: Docker MCP CLI `v0.44.3`; `docker mcp profile list` e `docker mcp profile show drisa` responderam, e o perfil continua a identificar os três servidores aprovados. Uma nova chamada a `docker mcp secret ls`, com a saída integral descartada, voltou a expirar. O Docker Desktop permanece `running`; não foi reiniciado outra vez e nenhum valor de segredo foi lido.
 
+O upstream tem uma [issue aberta no `docker/mcp-gateway`](https://github.com/docker/mcp-gateway/issues/551) que também relata `deadline_exceeded` em `ResolverService/GetSecrets` persistente após reinícios do Desktop. O relato é de macOS e Docker MCP `v0.43.3`, portanto é apenas um sintoma semelhante, não uma causa confirmada para este Windows com `v0.44.3`. Não foi aplicado nenhum contorno que copie ou contorne os segredos.
+
 ## Segurança
 
 - Não anexes exports de perfil, dados OAuth nem credenciais ao repositório ou à conversa.
