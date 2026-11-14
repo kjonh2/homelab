@@ -40,6 +40,8 @@ Revalidação em 2026-11-15 antes do reinício: Docker Desktop `4.99.0.245822` e
 
 Após o reinício autorizado em 2026-11-15, `docker desktop status` voltou a `running`, `docker version` respondeu com client/server `29.9.3` e `docker ps` confirmou 42 containers em execução. Duas chamadas a `docker mcp secret ls` após o Desktop estar pronto ainda expiraram no mesmo `ResolverService/GetSecrets`. Assim, o reinício recuperou o engine mas não o resolver de segredos; não foram feitas mais tentativas de reinício nem se leram valores dos segredos.
 
+Follow-up em 2026-11-15: Docker MCP CLI `v0.44.3`; `docker mcp profile list` e `docker mcp profile show drisa` responderam, e o perfil continua a identificar os três servidores aprovados. Uma nova chamada a `docker mcp secret ls`, com a saída integral descartada, voltou a expirar. O Docker Desktop permanece `running`; não foi reiniciado outra vez e nenhum valor de segredo foi lido.
+
 ## Segurança
 
 - Não anexes exports de perfil, dados OAuth nem credenciais ao repositório ou à conversa.
