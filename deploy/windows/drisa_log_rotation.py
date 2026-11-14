@@ -46,7 +46,8 @@ def append_rotating_text(
         raise ValueError("backup_count must be at least one")
 
     path = Path(filename)
-    line = f"{message.rstrip('\r\n')}\n"
+    normalized_message = message.rstrip("\r\n")
+    line = f"{normalized_message}\n"
     line_bytes = len(line.encode("utf-8"))
     with _TEXT_LOG_LOCK:
         path.parent.mkdir(parents=True, exist_ok=True)

@@ -100,6 +100,19 @@ function Get-DrisaProcesses([string]$ScriptPath) {
 
 function Ensure-DrisaProcess([string]$ScriptPath, [string]$PidFile, [string]$Name) {
     $running = @(Get-DrisaProcesses $ScriptPath)
+    if ($Name -eq 'voice listener' -and -not $gamingMode) {
+        $bridgePath = Join-Path $drisaDir 'drisa_bridge.tmp'
+        $bridge = Get-Item -LiteralPath $bridgePath -ErrorAction SilentlyContinue
+        $bridgeIsStale = -not $bridge -or $bridge.LastWriteTime -lt (Get-Date).AddMinutes(-3)
+        if ($running.Count -gt 0 -and $bridgeIsStale) {
+            Write-DrisaWatchdogLog 'voice listener is running but microphone meter is stale; restarting it'
+            foreach ($process in $running) {
+                Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+            }
+            Start-Sleep -Seconds 2
+            $running = @(Get-DrisaProcesses $ScriptPath)
+        }
+    }
     if ($Name -eq 'gateway') {
         $listener = Get-NetTCPConnection -State Listen -LocalAddress 127.0.0.1 -LocalPort 8765 -ErrorAction SilentlyContinue |
             Select-Object -First 1
