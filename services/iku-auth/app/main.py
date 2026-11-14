@@ -752,17 +752,11 @@ def oidc_signing_key() -> rsa.RSAPrivateKey:
                 serialization.PrivateFormat.PKCS8,
                 serialization.NoEncryption(),
             )
-            temporary = path.with_suffix(".pem.tmp")
-            temporary.write_bytes(key_data)
-            try:
-                os.chmod(temporary, 0o600)
-            except OSError:
-                pass
+            temporary = path.with_name(f"{path.name}.{secrets.token_hex(8)}.tmp")
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "wb") as key_file:
+                key_file.write(key_data)
             temporary.replace(path)
-            try:
-                os.chmod(path, 0o600)
-            except OSError:
-                pass
             return key
         except OSError as exc:
             raise HTTPException(status_code=503, detail="oidc_signing_key_unavailable") from exc
