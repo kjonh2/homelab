@@ -1,0 +1,339 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nextcloud-config
+  namespace: iku
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: local-path
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nextcloud-data-v2
+  namespace: iku
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 20Gi
+  storageClassName: local-path
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nextcloud-custom-apps
+  namespace: iku
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 2Gi
+  storageClassName: local-path
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nextcloud-themes
+  namespace: iku
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: local-path
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nextcloud-startup
+  namespace: iku
+data:
+  start-nextcloud.sh: |
+    #!/bin/sh
+    set -eu
+
+    cp -a /usr/src/nextcloud/. /var/www/html/
+    find /var/www/html \
+      \( -path /var/www/html/config -o -path /var/www/html/data -o -path /var/www/html/custom_apps -o -path /var/www/html/themes \) -prune \
+      -o -exec chown www-data:www-data {} +
+
+    mkdir -p /var/www/html/config /var/www/html/data /var/www/html/custom_apps /var/www/html/themes
+    chown www-data:www-data /var/www/html/config /var/www/html/data /var/www/html/custom_apps /var/www/html/themes
+
+    as_www_data() {
+      su -p www-data -s /bin/sh -c "$1"
+    }
+
+    config_file=/var/www/html/config/config.php
+    if [ ! -f "$config_file" ]; then
+      echo "Installing Nextcloud with persistent config/data volumes and SQLite"
+      as_www_data 'php /var/www/html/occ maintenance:install --database sqlite --admin-user "$NEXTCLOUD_ADMIN_USER" --admin-pass "$NEXTCLOUD_ADMIN_PASSWORD" --data-dir "$NEXTCLOUD_DATA_DIR"'
+    else
+      installed_version=$(php -r 'include "/var/www/html/config/config.php"; echo $CONFIG["version"] ?? "0.0.0.0";')
+      image_version=$(php -r 'require "/var/www/html/version.php"; echo implode(".", $OC_Version);')
+      if [ "$installed_version" != "$image_version" ]; then
+        echo "Upgrading Nextcloud from $installed_version to $image_version"
+        as_www_data 'php /var/www/html/occ upgrade --no-interaction'
+      fi
+    fi
+
+    as_www_data 'php /var/www/html/occ config:system:set trusted_domains 0 --value=localhost'
+    as_www_data 'php /var/www/html/occ config:system:set trusted_domains 1 --value="$NEXTCLOUD_TRUSTED_DOMAIN"'
+    as_www_data 'php /var/www/html/occ config:system:set trusted_domains 2 --value="$NEXTCLOUD_PUBLIC_DOMAIN"'
+    as_www_data 'php /var/www/html/occ config:system:set overwritehost --value="$OVERWRITEHOST"'
+    as_www_data 'php /var/www/html/occ config:system:set overwriteprotocol --value="$OVERWRITEPROTOCOL"'
+    as_www_data 'php /var/www/html/occ config:system:set overwrite.cli.url --value="$OVERWRITECLIURL"'
+
+    exec /entrypoint.sh apache2-foreground
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nextcloud
+  namespace: iku
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nextcloud
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nextcloud
+        app.kubernetes.io/part-of: iku
+      annotations:
+        iku.iknowu.org/nextcloud-startup-version: "5"
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: nextcloud
+          image: nextcloud:35.0.2-apache
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NEXTCLOUD_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: iku-data-secrets
+                  key: NEXTCLOUD_ADMIN_USER
+            - name: NEXTCLOUD_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: iku-data-secrets
+                  key: NEXTCLOUD_ADMIN_PASSWORD
+            - name: NEXTCLOUD_TRUSTED_DOMAINS
+              value: localhost vps-4e5174e4.tail2931da.ts.net:8444 cloud.iknowu.org
+            - name: NEXTCLOUD_TRUSTED_DOMAIN
+              value: vps-4e5174e4.tail2931da.ts.net:8444
+            - name: NEXTCLOUD_PUBLIC_DOMAIN
+              value: cloud.iknowu.org
+            - name: NEXTCLOUD_DATA_DIR
+              value: /var/www/html/data
+            - name: OVERWRITEPROTOCOL
+              value: https
+            - name: OVERWRITEHOST
+              value: cloud.iknowu.org
+            - name: OVERWRITECLIURL
+              value: https://cloud.iknowu.org
+          command: ["/bin/sh", "/opt/iku/start-nextcloud.sh"]
+          ports:
+            - name: http
+              containerPort: 80
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 2
+              memory: 1536Mi
+          startupProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 300
+          readinessProbe:
+            httpGet:
+              path: /status.php
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /status.php
+              port: http
+            initialDelaySeconds: 300
+            periodSeconds: 30
+          volumeMounts:
+            - name: config
+              mountPath: /var/www/html/config
+            - name: data
+              mountPath: /var/www/html/data
+            - name: custom-apps
+              mountPath: /var/www/html/custom_apps
+            - name: themes
+              mountPath: /var/www/html/themes
+            - name: startup
+              mountPath: /opt/iku/start-nextcloud.sh
+              subPath: start-nextcloud.sh
+              readOnly: true
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+              add: [CHOWN, DAC_OVERRIDE, FOWNER, NET_BIND_SERVICE, SETGID, SETUID]
+      volumes:
+        - name: config
+          persistentVolumeClaim:
+            claimName: nextcloud-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: nextcloud-data-v2
+        - name: custom-apps
+          persistentVolumeClaim:
+            claimName: nextcloud-custom-apps
+        - name: themes
+          persistentVolumeClaim:
+            claimName: nextcloud-themes
+        - name: startup
+          configMap:
+            name: nextcloud-startup
+            defaultMode: 0555
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nextcloud
+  namespace: iku
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: nextcloud
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: n8n-data
+  namespace: iku
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 2Gi
+  storageClassName: local-path
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: n8n
+  namespace: iku
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: n8n
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: n8n
+        app.kubernetes.io/part-of: iku
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: n8n
+          image: docker.n8n.io/n8nio/n8n:2.46.6
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: N8N_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: iku-data-secrets
+                  key: N8N_ENCRYPTION_KEY
+            - name: N8N_PORT
+              value: "5678"
+            - name: N8N_PROTOCOL
+              value: https
+            - name: N8N_HOST
+              value: vps-4e5174e4.tail2931da.ts.net
+            - name: N8N_EDITOR_BASE_URL
+              value: https://vps-4e5174e4.tail2931da.ts.net:8443/
+            - name: N8N_WEBHOOK_URL
+              value: https://vps-4e5174e4.tail2931da.ts.net:8443/
+            - name: N8N_PROXY_HOPS
+              value: "1"
+            - name: N8N_SECURE_COOKIE
+              value: "true"
+            - name: N8N_DIAGNOSTICS_ENABLED
+              value: "false"
+            - name: N8N_PERSONALIZATION_ENABLED
+              value: "false"
+          ports:
+            - name: http
+              containerPort: 5678
+          resources:
+            requests:
+              cpu: 100m
+              memory: 384Mi
+            limits:
+              cpu: 1
+              memory: 1024Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          volumeMounts:
+            - name: data
+              mountPath: /home/node/.n8n
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: n8n-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: n8n
+  namespace: iku
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: n8n
+  ports:
+    - name: http
+      port: 5678
+      targetPort: http

@@ -1,0 +1,8 @@
+numpy==2.4.6
+sounddevice==0.5.5
+webrtcvad==2.0.10
+soundfile==0.14.0
+requests==2.34.2
+cryptography==50.0.2
+psycopg[binary]==3.2.9
+PyYAML==6.0.3

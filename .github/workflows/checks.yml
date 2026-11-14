@@ -1,0 +1,110 @@
+name: Homelab checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  auth-and-drisa-tests:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Install Auth test dependencies
+        run: python -m pip install -r services/iku-auth/requirements-dev.txt
+
+      - name: Install Drisa test dependencies
+        run: python -m pip install requests==2.34.2 websockets==17.3 numpy==2.4.6 sounddevice==0.5.5
+
+      - name: Run Auth and Drisa tests
+        run: >-
+          python -m pytest -q
+          services/iku-auth/tests
+          deploy/windows/test_drisa_main.py
+          deploy/windows/test_drisa_voice_gateway.py
+          deploy/windows/test_drisa_speech_text.py
+          deploy/windows/test_voice_loop_local.py
+          deploy/windows/test_drisa_memory.py
+          deploy/windows/test_drisa_log_rotation.py
+
+      - name: Test Gaming-mode routing
+        shell: pwsh
+        run: ./deploy/windows/test_drisa_remote_config.ps1
+
+  web-builds:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "22"
+
+      - name: Build Iku portal
+        working-directory: iku-portal
+        run: npm ci && npm run build
+
+      - name: Build public landing page
+        working-directory: public-site
+        run: npm ci && npm run build
+
+      - name: Verify Cloudflare preview assets are current
+        run: git diff --exit-code -- public-site/dist
+
+  android-modern-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Java 17
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+
+      - name: Install Android 17 preview SDK packages
+        run: >-
+          sdkmanager --channel=3 --install
+          "platforms;android-37.0"
+          "build-tools;37.0.0"
+          "ndk;28.2.13676358"
+          "cmake;3.22.1"
+
+      - name: Build modern Android APK
+        working-directory: android
+        run: bash gradlew --no-daemon :app:assembleModernDebug
+
+      - name: Upload modern debug APK
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: iku-android-modern-debug
+          path: android/app/build/outputs/apk/modern/debug/app-modern-debug.apk
+          if-no-files-found: error
+          retention-days: 14
