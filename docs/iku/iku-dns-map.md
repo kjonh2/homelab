@@ -1,30 +1,28 @@
-# Iku DNS / service map
+# Mapa DNS / serviços do Iku
 
-## Root and static
-- `iknowu.org` -> existing tunnel / current root routing
-- `www.iknowu.org` -> existing CNAME target already configured
+## Rotas públicas ativas
 
-## Serviços previstos no VPS
-Estes serviços devem ser publicados pelo Cloudflare Tunnel; os registos públicos não devem expor diretamente o IP de origem:
+- `iknowu.org` e `www.iknowu.org` servem o site público do Iku.
+- `app.iknowu.org` serve o portal Iku e as páginas de autenticação.
+- `cloud.iknowu.org` serve o Nextcloud através do túnel Cloudflare `iku-public-vps` e do Nginx do site público.
+
+As portas web da VPS permanecem fechadas; o Cloudflare Tunnel é a entrada pública destas rotas.
+
+## Rotas privadas ativas
+
+- `https://vps-4e5174e4.tail2931da.ts.net:8443/` serve o n8n através do Tailscale Serve, do encaminhamento local `iku-n8n-forward` e do serviço ClusterIP `n8n.iku.svc.cluster.local:5678`.
+- O portal Iku, a API LFM3 e os restantes serviços administrativos permanecem privados na Tailscale ou dentro do cluster.
+
+O caminho público `iknowu.org/n8n` abre atualmente a landing page do Iku; não encaminha para o n8n. O hostname `n8n.iknowu.org` não está configurado como rota ativa. Usa o endereço privado da Tailscale acima.
+
+## Rotas planeadas
+
+Estes serviços não fazem parte da entrada pública atual e não devem ser tratados como rotas ativas:
+
 - `gitlab.iknowu.org`
-- `cloud.iknowu.org`
-- `n8n.iknowu.org`
 - `ai.iknowu.org`
 - `confy.iknowu.org`
 - `webui.iknowu.org`
 - `grafana.iknowu.org`
 
-The public `cloud.iknowu.org` hostname is served through the `iku-public-vps` Cloudflare Tunnel. Its ingress targets the Nginx sidecar on port 80, and Nginx proxies only that hostname to the Nextcloud ClusterIP service. Keep the VPS web ports closed; the tunnel is the public ingress.
-
-## Roteamento Kubernetes atual e planeado
-- `cloud.iknowu.org` -> `iku-public-vps` tunnel -> public-site Nginx -> `nextcloud.iku.svc.cluster.local:80`
-- `n8n.iknowu.org` -> `iku-n8n`
-- `ai.iknowu.org` -> `iku-ai`
-- `webui.iknowu.org` -> `iku-webui`
-- `confy.iknowu.org` -> `iku-confy`
-- `grafana.iknowu.org` -> `iku-grafana`
-- `gitlab.iknowu.org` -> GitLab container / upstream
-
-## Rule
-Do not invent extra public hostnames unless they are in the DNS records.
-If a record exists in Cloudflare as an `A` or `CNAME`, the compose and proxy must use the same hostname.
+Não publiques um serviço apenas adicionando um registo DNS. É necessário configurar a entrada correspondente no Cloudflare Tunnel e no proxy, e documentar a política de acesso.

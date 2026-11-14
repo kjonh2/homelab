@@ -1,36 +1,18 @@
 # Iku routing policy
 
-## Público para todos os users
-Serviços públicos devem ficar em caminhos sob `iknowu.org/`, ou num hostname dedicado quando o serviço depende de URLs absolutas ou WebDAV:
-- `iknowu.org/n8n`
-- `iknowu.org/confy`
-- `iknowu.org/webui`
-- `cloud.iknowu.org` (Nextcloud)
+## Rotas públicas
 
-## Admin / interno
-Serviços internos e administrativos devem ficar em subdomínios e exigir login:
-- `gitlab.iknowu.org`
-- `ai.iknowu.org`
-- `grafana.iknowu.org`
-- quaisquer APIs privadas
+- `iknowu.org` serve a landing page pública do Iku.
+- `app.iknowu.org` serve o portal e as páginas de login; as rotas autenticadas e administrativas são protegidas pelo Iku Auth.
+- `cloud.iknowu.org` serve o Nextcloud através do Cloudflare Tunnel e do Nginx do site público.
 
-## Regra prática
-- Se é para todos os users, usa path-based routing em `iknowu.org/<serviço>`.
-- Se é só para admin, usa subdomínio separado com autenticação interna.
-- O root `iknowu.org` deve servir a landing/portal do Iku e encaminhar para os serviços públicos.
+## Rotas privadas
 
-## Roteamento implementado
-- Cloudflare Tunnel `iku-public-vps` encaminha `iknowu.org`, `app.iknowu.org` e `cloud.iknowu.org` ao Nginx público.
-- Nginx encaminha `app.iknowu.org` ao portal e `cloud.iknowu.org` ao serviço Nextcloud ClusterIP.
-- As portas web do VPS permanecem fechadas; os serviços internos continuam disponíveis apenas pela Tailscale Serve.
+- O n8n está disponível em `https://vps-4e5174e4.tail2931da.ts.net:8443/`, através do Tailscale Serve e de um encaminhamento local para o serviço ClusterIP.
+- O LFM3 e as restantes APIs administrativas permanecem privados na Tailscale ou no cluster Kubernetes.
 
-## Futuras rotas
-No proxy:
-- `PathPrefix(`/n8n`)` -> n8n
-- `PathPrefix(`/confy`)` -> confy
-- `PathPrefix(`/webui`)` -> webui
+Não uses `iknowu.org/n8n` como endereço do n8n: esse caminho abre atualmente o site público. `n8n.iknowu.org` não é uma rota ativa. O editor e os webhooks do n8n estão configurados para o endereço privado da Tailscale.
 
-## Observação
-Se a app não suportar subpath direito, usar um redirect curto:
-- `iknowu.org/cloud` -> `cloud.iknowu.org`
-- `iknowu.org/n8n` -> `n8n.iknowu.org`
+## Rotas futuras
+
+Uma futura rota pública para serviços como Confy ou WebUI precisa de configuração correspondente no proxy/túnel e de uma política de acesso definida antes de se adicionar DNS. Uma resposta HTTP 200 da landing page não comprova que o serviço está encaminhado para esse caminho.
