@@ -48,8 +48,8 @@ Install development dependencies, run the API suite, and build the auth image fr
 ```powershell
 python -m pip install -r services/iku-auth/requirements-dev.txt
 python -m unittest discover -s services/iku-auth/tests -v
-docker build -t iku-auth:0.1.9 -f services/iku-auth/Dockerfile services/iku-auth
-docker build -t iku-portal:0.1.10 -f iku-portal/Dockerfile iku-portal
+docker build -t iku-auth:0.2.0 -f services/iku-auth/Dockerfile services/iku-auth
+docker build -t iku-portal:0.1.11 -f iku-portal/Dockerfile iku-portal
 ```
 
 Create a random 32-byte bootstrap token locally and keep it in a user-only file; transfer it to the VPS without printing it. On the VPS, create the encryption key and Kubernetes Secret:
@@ -67,7 +67,21 @@ sudo k3s kubectl -n iku rollout status deployment/iku-auth --timeout=120s
 
 The first administrator bootstrap is complete on the live VPS. For a fresh installation only, open [the private Iku portal](https://vps-4e5174e4.tail2931da.ts.net/) while connected to Tailscale, choose **Configurar o primeiro administrador**, set the administrator credentials locally, enroll TOTP, save recovery codes, and confirm a fresh TOTP. Never send the bootstrap token, password, TOTP seed, or recovery codes in chat. After setup, remove the `bootstrap-token` key from the Kubernetes Secret and its VPS file; the live Kubernetes key and VPS file have been removed, and the database permanently disables bootstrap. A leftover client-side token file remains on this Windows PC and should be deleted manually; the completed bootstrap and removed Secret key make it unusable.
 
-The portal session guard checks the API on every portal request and fails closed if auth cannot be reached. On Android, connect Tailscale, open **Perfil → Ligar sessão Iku**, then confirm the admin TOTP. The Profile screen exchanges a verified Firebase identity for an Iku session and stores access/refresh tokens encrypted with Android Keystore; it rotates refresh tokens on reconnect and revokes the session on logout. Firebase remains the app sign-in provider during this bridge. The Início screen calls `/api/homelab/status` with the short-lived Iku bearer token; the portal validates it with Iku Auth before returning only the three service health states. API tokens are managed in the portal's **Segurança** page. SSO proxying remains follow-up work. Nextcloud, n8n, and model APIs continue using their own authentication until moved behind the auth gateway and tested. The current Redmi install and this updated dashboard source have not been hash-matched or verified together.
+The portal session guard checks the API on every portal request and fails closed if auth cannot be reached. On Android, connect Tailscale, open **Perfil → Ligar sessão Iku**, then confirm the admin TOTP. The Profile screen exchanges a verified Firebase identity for an Iku session and stores access/refresh tokens encrypted with Android Keystore; it rotates refresh tokens on reconnect and revokes the session on logout. Firebase remains the app sign-in provider during this bridge. The Início screen calls `/api/homelab/status` with the short-lived Iku bearer token; the portal validates it with Iku Auth before returning only the three service health states. API tokens are managed in the portal's **Segurança** page. The local `0.2.0` auth and `0.1.11` portal builds add the OIDC provider routes and an MFA-protected account-to-Nextcloud-UID mapping in **Admin → Contas Iku**. The production deployment needs the client secret and the Nextcloud `user_oidc` app before SSO is available; retain Nextcloud's password login until an end-to-end login is verified. The current Redmi install and this updated dashboard source have not been hash-matched or verified together.
+
+### Nextcloud OIDC
+
+The auth Deployment uses the issuer `https://app.iknowu.org/api/auth/oidc` and the fixed Nextcloud callback `https://cloud.iknowu.org/apps/user_oidc/code`. Generate and store the client secret on the VPS without printing it, then create the separate Kubernetes Secret before applying `auth.yaml`:
+
+```bash
+sudo install -d -m 700 /etc/rancher/k3s/secrets/iku-auth-oidc
+sudo sh -c 'umask 077; test -s /etc/rancher/k3s/secrets/iku-auth-oidc/client-secret || openssl rand -hex 32 > /etc/rancher/k3s/secrets/iku-auth-oidc/client-secret'
+sudo k3s kubectl -n iku create secret generic iku-auth-oidc \
+  --from-file=client-secret=/etc/rancher/k3s/secrets/iku-auth-oidc/client-secret \
+  --dry-run=client -o yaml | sudo k3s kubectl apply -f -
+```
+
+Build/import auth `0.2.0` and portal `0.1.11`, apply their manifests, and verify both rollouts. Confirm discovery at `https://app.iknowu.org/api/auth/oidc/.well-known/openid-configuration`. Install Nextcloud's `user_oidc` app and configure client ID `nextcloud`, the discovery URL above, and the secret from the protected VPS file. Keep the existing password login enabled. In the Iku portal, **Admin → Contas Iku**, set the current administrator's Nextcloud UID to `ikuadmin`; this maps the OIDC `sub` to the existing account so its current files remain attached. Test the SSO button and a normal login before considering any change to local login or auto-provisioning. Never put the client secret in this repository, a command transcript, or chat.
 
 ## LFM3
 

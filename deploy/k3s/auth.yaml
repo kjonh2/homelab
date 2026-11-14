@@ -47,7 +47,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: auth
-          image: iku-auth:0.1.9
+          image: iku-auth:0.2.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -63,11 +63,24 @@ spec:
               value: https://vps-4e5174e4.tail2931da.ts.net
             - name: IKU_FIREBASE_PROJECT_ID
               value: local-44782
+            - name: IKU_OIDC_ISSUER
+              value: https://app.iknowu.org/api/auth/oidc
+            - name: IKU_OIDC_CLIENT_ID
+              value: nextcloud
+            - name: IKU_OIDC_CLIENT_SECRET_FILE
+              value: /run/secrets/iku-oidc/client-secret
+            - name: IKU_OIDC_REDIRECT_URI
+              value: https://cloud.iknowu.org/apps/user_oidc/code
+            - name: IKU_OIDC_LOGIN_URL
+              value: https://app.iknowu.org/login
           volumeMounts:
             - name: data
               mountPath: /var/lib/iku-auth
             - name: secrets
               mountPath: /run/secrets/iku-auth
+              readOnly: true
+            - name: oidc-client
+              mountPath: /run/secrets/iku-oidc
               readOnly: true
           resources:
             requests:
@@ -103,6 +116,10 @@ spec:
         - name: secrets
           secret:
             secretName: iku-auth-secrets
+            defaultMode: 0440
+        - name: oidc-client
+          secret:
+            secretName: iku-auth-oidc
             defaultMode: 0440
 ---
 apiVersion: v1
