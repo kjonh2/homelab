@@ -46,3 +46,5 @@ public-site/dist/
 __pycache__/
 *.py[cod]
 **/.venv/
+/drisa_v2.log
+/drisa_local.log
