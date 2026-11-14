@@ -51,6 +51,10 @@ class DrisaVoiceActivity : AppCompatActivity() {
     private var recordThread: Thread? = null
     private val recording = AtomicBoolean(false)
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val audioResponseTimeout = Runnable {
+        setStatus("A resposta da Drisa demorou demasiado nesta etapa. Tenta novamente.")
+    }
+    private val audioStageTimeoutMs = 210_000L
     private val recordingLimit = Runnable {
         if (recording.get()) {
             setStatus("Limite de gravação de 2 minutos atingido. A enviar a mensagem.")
@@ -213,13 +217,28 @@ class DrisaVoiceActivity : AppCompatActivity() {
                         }
                         "models_catalog" -> runOnUiThread { showModelCatalog(message) }
                         "model_operation" -> runOnUiThread { showModelOperation(message) }
-                        "transcript" -> runOnUiThread { appendMessage("Tu", message.optString("text")) }
-                        "reply" -> runOnUiThread { appendMessage("Drisa", message.optString("text")) }
-                        "audio_error" -> runOnUiThread { setStatus(message.optString("message", "Áudio inválido.")) }
+                        "processing" -> runOnUiThread {
+                            awaitAudioResponse(message.optString("message", "A Drisa está a responder…"))
+                        }
+                        "transcript" -> runOnUiThread {
+                            appendMessage("Tu", message.optString("text"))
+                            awaitAudioResponse("Transcrição recebida; a Drisa está a preparar a resposta…")
+                        }
+                        "reply" -> runOnUiThread {
+                            appendMessage("Drisa", message.optString("text"))
+                            awaitAudioResponse("Resposta pronta; a preparar voz Kokoro…")
+                        }
+                        "audio_error" -> runOnUiThread {
+                            clearAudioResponseTimeout()
+                            setStatus(message.optString("message", "Áudio inválido."))
+                        }
                         "tts" -> playReply(message.optString("audio_b64"))
                     }
                 } catch (_: Exception) {
-                    runOnUiThread { setStatus("A gateway enviou uma resposta inválida.") }
+                    runOnUiThread {
+                        clearAudioResponseTimeout()
+                        setStatus("A gateway enviou uma resposta inválida.")
+                    }
                 }
             }
 
@@ -227,6 +246,7 @@ class DrisaVoiceActivity : AppCompatActivity() {
                 authenticated = false
                 socket = null
                 runOnUiThread {
+                    clearAudioResponseTimeout()
                     setStatus("Falha na ligação: ${t.message ?: "sem resposta"}. Confirma o Tailscale e o endereço da gateway.")
                     updateButtons()
                 }
@@ -235,13 +255,18 @@ class DrisaVoiceActivity : AppCompatActivity() {
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 authenticated = false
                 socket = null
-                runOnUiThread { setStatus("Ligação terminada."); updateButtons() }
+                runOnUiThread {
+                    clearAudioResponseTimeout()
+                    setStatus("Ligação terminada.")
+                    updateButtons()
+                }
             }
         })
         updateButtons()
     }
 
     private fun disconnect() {
+        clearAudioResponseTimeout()
         stopRecording(send = false)
         authenticated = false
         socket?.close(1000, "user disconnected")
@@ -296,13 +321,14 @@ class DrisaVoiceActivity : AppCompatActivity() {
             val message = JSONObject()
                 .put("type", "audio")
                 .put("audio_b64", Base64.encodeToString(wav, Base64.NO_WRAP))
-            if (socket?.send(message.toString()) == true) setStatus("Áudio enviado. A Drisa está a responder…")
+            if (socket?.send(message.toString()) == true) awaitAudioResponse("Áudio enviado. A Drisa está a responder…")
             else setStatus("Não foi possível enviar o áudio.")
         }
         updateButtons()
     }
 
     private fun playReply(encoded: String) {
+        clearAudioResponseTimeout()
         val audioFile = try {
             val file = File.createTempFile("drisa-reply-", ".wav", cacheDir)
             FileOutputStream(file).use { it.write(Base64.decode(encoded, Base64.DEFAULT)) }
@@ -328,7 +354,10 @@ class DrisaVoiceActivity : AppCompatActivity() {
                         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                         .build()
                 )
-                player.setOnPreparedListener { it.start() }
+                player.setOnPreparedListener {
+                    it.start()
+                    setStatus("A reproduzir a resposta da Drisa.")
+                }
                 player.setOnCompletionListener { releaseReplyPlayer(it, audioFile) }
                 player.setOnErrorListener { mp, _, _ ->
                     releaseReplyPlayer(mp, audioFile)
@@ -355,6 +384,16 @@ class DrisaVoiceActivity : AppCompatActivity() {
 
     private fun appendMessage(speaker: String, text: String) {
         transcript.append("$speaker: $text\n\n")
+    }
+
+    private fun awaitAudioResponse(message: String) {
+        mainHandler.removeCallbacks(audioResponseTimeout)
+        setStatus(message)
+        mainHandler.postDelayed(audioResponseTimeout, audioStageTimeoutMs)
+    }
+
+    private fun clearAudioResponseTimeout() {
+        mainHandler.removeCallbacks(audioResponseTimeout)
     }
 
     private val modelSelectionListener = object : android.widget.AdapterView.OnItemSelectedListener {

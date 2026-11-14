@@ -41,6 +41,9 @@ BRIDGE_RESP = BASE / "drisa_response.tmp"
 MAX_AUDIO_BYTES = 6 * 1024 * 1024
 MAX_AUDIO_BASE64_CHARS = ((MAX_AUDIO_BYTES + 2) // 3) * 4
 MAX_WEBSOCKET_MESSAGE_BYTES = 8 * 1024 * 1024
+STT_TIMEOUT_SECONDS = 180
+LLM_TIMEOUT_SECONDS = 120
+TTS_TIMEOUT_SECONDS = 150
 
 RECORDINGS.mkdir(exist_ok=True)
 VAULT.mkdir(parents=True, exist_ok=True)
@@ -756,30 +759,80 @@ async def handle_client(ws):
             await asyncio.to_thread(wav_path.write_bytes, audio)
 
             pol = cfg["policies"].get(device_id, cfg["unknown"]) if authed else cfg["unknown"]
-            text = ""
-            if pol.get("transcribe"):
-                # STT, LLM and TTS calls are synchronous and can take over a minute.
-                # Keep them off the event loop so websocket ping/pong stays responsive.
-                text = await asyncio.to_thread(transcribe, wav_path)
-                if text:
-                    await asyncio.to_thread(log_to_obsidian, device_id, user, text)
-                    await ws.send(json.dumps({"type": "transcript", "text": text, "file": wav_path.name}))
+            async def report_error(message: str) -> None:
+                await ws.send(json.dumps({"type": "audio_error", "message": message}, ensure_ascii=False))
 
-            if pol.get("reply") and text:
-                await asyncio.to_thread(send_to_drisa, text, user)
-                reply = await asyncio.to_thread(llm_reply, text)
-                if reply:
-                    await asyncio.to_thread(log_to_obsidian, device_id, user, reply, "drisa")
-                    await ws.send(json.dumps({"type": "reply", "text": reply}))
-                    audio = await asyncio.to_thread(tts_kokoro, reply)
-                    if audio:
-                        await ws.send(json.dumps({
-                            "type": "tts", "audio_b64": base64.b64encode(audio).decode(),
-                            "format": "wav_24000"
-                        }))
-            elif not authed:
-                log_to_obsidian(device_id, user,
-                                f"áudio gravado {wav_path.name} (sem resposta — desconhecido)")
+            if not pol.get("transcribe"):
+                await report_error("A transcrição não está autorizada para este dispositivo.")
+                continue
+
+            await ws.send(json.dumps({
+                "type": "processing", "stage": "transcription",
+                "message": "A transcrever com MOSS; Parakeet será usado se necessário."
+            }, ensure_ascii=False))
+            try:
+                # Keep websocket ping/pong responsive and bound each inference stage.
+                text = await asyncio.wait_for(
+                    asyncio.to_thread(transcribe, wav_path), timeout=STT_TIMEOUT_SECONDS
+                )
+            except asyncio.TimeoutError:
+                await report_error("A transcrição demorou demasiado. Tenta novamente daqui a pouco.")
+                continue
+            except Exception:
+                await report_error("Não consegui transcrever o áudio. Verifica MOSS e Parakeet.")
+                continue
+            text = text.strip() if isinstance(text, str) else ""
+            if not text:
+                await report_error("MOSS e Parakeet não conseguiram transcrever o áudio.")
+                continue
+
+            await asyncio.to_thread(log_to_obsidian, device_id, user, text)
+            await ws.send(json.dumps({"type": "transcript", "text": text, "file": wav_path.name}, ensure_ascii=False))
+            if not pol.get("reply"):
+                await report_error("A resposta da Drisa não está autorizada para este dispositivo.")
+                continue
+
+            await ws.send(json.dumps({
+                "type": "processing", "stage": "llm", "message": "Transcrição recebida; a Drisa está a preparar a resposta."
+            }, ensure_ascii=False))
+            await asyncio.to_thread(send_to_drisa, text, user)
+            try:
+                reply = await asyncio.wait_for(
+                    asyncio.to_thread(llm_reply, text), timeout=LLM_TIMEOUT_SECONDS
+                )
+            except asyncio.TimeoutError:
+                await report_error("A resposta do modelo demorou demasiado. Tenta novamente.")
+                continue
+            except Exception:
+                await report_error("Não consegui preparar a resposta agora.")
+                continue
+            reply = reply.strip() if isinstance(reply, str) else ""
+            if not reply:
+                await report_error("Não consegui preparar a resposta agora.")
+                continue
+
+            await asyncio.to_thread(log_to_obsidian, device_id, user, reply, "drisa")
+            await ws.send(json.dumps({"type": "reply", "text": reply}, ensure_ascii=False))
+            await ws.send(json.dumps({
+                "type": "processing", "stage": "tts", "message": "Resposta pronta; a gerar voz Kokoro."
+            }, ensure_ascii=False))
+            try:
+                audio = await asyncio.wait_for(
+                    asyncio.to_thread(tts_kokoro, reply), timeout=TTS_TIMEOUT_SECONDS
+                )
+            except asyncio.TimeoutError:
+                await report_error("A geração de voz Kokoro demorou demasiado.")
+                continue
+            except Exception:
+                await report_error("A Drisa respondeu, mas não conseguiu gerar o áudio Kokoro.")
+                continue
+            if not audio:
+                await report_error("A Drisa respondeu, mas não conseguiu gerar o áudio Kokoro.")
+                continue
+            await ws.send(json.dumps({
+                "type": "tts", "audio_b64": base64.b64encode(audio).decode(),
+                "format": "wav_24000"
+            }))
         # type "ping" → pong
         if mtype == "ping":
             await ws.send(json.dumps({"type": "pong"}))

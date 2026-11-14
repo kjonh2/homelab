@@ -511,9 +511,54 @@ class GatewayAsyncAudioTests(unittest.IsolatedAsyncioTestCase):
             await heartbeat_task
 
         self.assertGreaterEqual(ticks, 5)
-        self.assertEqual([message["type"] for message in socket.sent], ["auth", "transcript", "reply", "tts"])
+        self.assertEqual(
+            [message["type"] for message in socket.sent],
+            ["auth", "processing", "transcript", "processing", "reply", "processing", "tts"],
+        )
         llm.assert_called_once_with("hello")
         tts.assert_called_once_with("reply")
+
+    async def test_empty_transcript_returns_terminal_audio_error(self):
+        wav = b"RIFF" + struct.pack("<I", 4) + b"WAVE"
+        config = {
+            "allowlist": ["test-device"],
+            "policies": {"test-device": {"transcribe": True, "reply": True}},
+            "unknown": {"transcribe": False, "reply": False},
+        }
+
+        class FakeWebSocket:
+            remote_address = "test"
+
+            def __init__(self):
+                self.messages = iter([
+                    json.dumps({"type": "hello", "device_id": "test-device", "token": "test-token"}),
+                    json.dumps({"type": "audio", "audio_b64": base64.b64encode(wav).decode("ascii")}),
+                ])
+                self.sent = []
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                try:
+                    return next(self.messages)
+                except StopIteration:
+                    raise StopAsyncIteration
+
+            async def send(self, message):
+                self.sent.append(json.loads(message))
+
+        socket = FakeWebSocket()
+        with (
+            patch.object(gateway, "load_config", return_value=config),
+            patch.object(gateway, "load_token", return_value="test-token"),
+            patch.object(gateway, "transcribe", return_value=""),
+            patch.object(gateway, "log_to_obsidian"),
+        ):
+            await asyncio.wait_for(gateway.handle_client(socket), timeout=2)
+
+        self.assertEqual([message["type"] for message in socket.sent], ["auth", "processing", "audio_error"])
+        self.assertIn("não conseguiram transcrever", socket.sent[-1]["message"])
 
 
 def tearDownModule():
