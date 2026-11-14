@@ -18,6 +18,18 @@ Esta VPS suporta os serviços de portal, automação e cloud observados junto co
 
 Em 2026-11-12, a API autenticada `/models` mostrou `lfm3-uncensored` carregado; `/health` e `/models` responderam HTTP 200. A configuração da Drisa aponta para esta API da VPS. Este estado substitui a nota anterior sobre o modelo Omni em execução; Omni e texto continuam a ser opções selecionáveis, com apenas um modelo residente de cada vez.
 
+### Medição comparativa LFM3 — 2026-11-14
+
+As três variantes foram carregadas e medidas sequencialmente na VPS, sem modelos concorrentes. Cada pedido não streaming pediu um parágrafo em português europeu, com limite de 160 tokens e temperatura 0,2. Os tokens/s abaixo dividem os tokens de conclusão pelo tempo total HTTP; incluem pré-processamento e latência do router, por isso são estimativas de throughput percebido e não velocidade pura de descodificação.
+
+| Modelo | Tokens de conclusão | Tempo total | Estimativa de parede |
+|---|---:|---:|---:|
+| `lfm3-uncensored` | 144 | 10,01 s | 14,4 tokens/s |
+| `lfm3-text` | 134 | 9,58 s | 14,0 tokens/s |
+| `lfm3-omni` | 160 | 11,38 s | 14,1 tokens/s |
+
+Os testes usaram pedidos de texto; não medem entrada de áudio nem o percurso completo da Drisa. Depois dos testes, `lfm3-uncensored` foi restaurado como modelo selecionado e uma chamada final respondeu HTTP 200. A VPS mantém `--models-max 1`, pelo que só um destes modelos fica residente de cada vez.
+
 Na medição de 2026-11-11, o cluster tinha um nó. A situação mudou em 2026-11-12: o cluster tem agora dois nós Ready, com a VPS como único control plane e o homelab como worker tainted. Isto não fornece alta disponibilidade do control plane. As PVCs usam armazenamento local e não substituem backups. O estado mais recente está abaixo.
 
 Em 2026-11-12, a partir do portátil ligado ao tailnet, o portal redirecionou `/` para `/login` (307) e `/login` respondeu 200; n8n `/healthz`, Nextcloud `/status.php` e LFM3 `/health` responderam 200 nas portas privadas `8443`, `8444` e `8445`. Isto confirma as rotas HTTPS tailnet-only em funcionamento. Os Services Kubernetes continuam ClusterIP; estes resultados não substituem a auditoria das regras públicas do firewall.
