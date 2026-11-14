@@ -141,7 +141,7 @@ class DrisaVoiceActivity : AppCompatActivity() {
         }
         status = label("Desligada")
         connectButton = Button(this).apply { text = "Ligar à Drisa" }
-        talkButton = Button(this).apply { text = "Manter premido para falar"; isEnabled = false }
+        talkButton = Button(this).apply { text = "Gravar mensagem de voz"; isEnabled = false }
         transcript = TextView(this).apply {
             textSize = 16f
             setPadding(0, dp(12), 0, dp(12))
@@ -328,7 +328,7 @@ class DrisaVoiceActivity : AppCompatActivity() {
             recorder = audioRecord
             recording.set(true)
             talkButton.text = "Parar e enviar voz"
-            setStatus("Microfone ativo. Fala agora; toca novamente quando acabares.")
+            setStatus("Microfone ativo. Fala agora; toca em “Parar e enviar voz” para enviar.")
             mainHandler.postDelayed(recordingLimit, 120_000)
             recordThread = Thread {
                 val buffer = ByteArray(maxOf(minBuffer, 8192))
