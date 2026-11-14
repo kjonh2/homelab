@@ -17,6 +17,24 @@ import drisa_voice_gateway as gateway
 from drisa_voice_gateway import MAX_AUDIO_BYTES, decode_audio_payload
 
 
+class ModelManagementErrorTests(unittest.TestCase):
+    def test_mcp_auth_and_disabled_errors_are_actionable(self):
+        import requests
+
+        for status, expected in (
+            (401, "Settings > API"),
+            (404, "Settings > Agents"),
+        ):
+            with self.subTest(status=status):
+                response = type("FakeResponse", (), {"status_code": status})()
+                with (
+                    patch.object(gateway, "_unsloth_cfg", return_value={"base_url": "http://127.0.0.1:8888/v1", "key": ""}),
+                    patch.object(requests, "post", return_value=response),
+                ):
+                    with self.assertRaisesRegex(RuntimeError, expected):
+                        gateway._mcp_tool("list_models", {"kind": "llm"})
+
+
 class AudioPayloadTests(unittest.TestCase):
     @staticmethod
     def make_wav(payload: bytes) -> bytes:

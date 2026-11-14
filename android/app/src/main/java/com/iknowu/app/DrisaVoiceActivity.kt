@@ -142,6 +142,8 @@ class DrisaVoiceActivity : AppCompatActivity() {
         root.addView(label("Onde carregar"))
         modelHostPicker = Spinner(this).apply {
             adapter = spinnerAdapter(listOf("Portátil", "VPS", "Homelab"))
+            // The VPS is the primary LLM host; keep the other locations selectable.
+            setSelection(1, false)
         }
         root.addView(modelHostPicker, matchWrap())
         root.addView(label("Categoria"))

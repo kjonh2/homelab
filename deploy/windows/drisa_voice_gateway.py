@@ -171,6 +171,10 @@ def _mcp_tool(name: str, arguments: dict) -> dict:
         headers["Authorization"] = f"Bearer {cfg['key']}"
     body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}}
     response = requests.post(base, json=body, headers=headers, timeout=(5, 260))
+    if response.status_code == 401:
+        raise RuntimeError("O Unsloth Studio recusou a API key da Drisa. Configura uma chave válida em Settings > API.")
+    if response.status_code == 404:
+        raise RuntimeError("O MCP do Unsloth Studio está desativado. Ativa Allow agent connections em Settings > Agents.")
     response.raise_for_status()
     envelope = None
     for line in response.text.splitlines():
