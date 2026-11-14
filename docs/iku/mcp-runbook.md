@@ -1,12 +1,12 @@
 # Iku / Drisa MCP Runbook
 
-Última verificação: 2026-11-12.
+Última verificação: 2026-11-14.
 
 ## Modelo de instalação
 
 - O Docker MCP Toolkit corre neste portátil Windows, onde está o agente Drisa/Hermes. A homelab e a VPS expõem os serviços; não precisam de cópias do perfil MCP do portátil.
 - Usa o perfil `drisa` para o agente. Mantém o perfil pessoal `kiko` separado; não exportes nem atribuas as permissões mais amplas desse perfil à Drisa.
-- O perfil `drisa` permite leitura do GitHub, pesquisa/leitura do Obsidian, leitura de transcrições do YouTube e ferramentas de documentação Cloudflare. Não permite escrita no GitHub, escrita/eliminação no Obsidian, shell, ciclo de vida de containers nem deployment.
+- O perfil `drisa` contém apenas `github-official`, `obsidian` e `youtube_transcript`, com ferramentas de leitura. Não contém Cloudflare Docs nem permite escrita no GitHub, escrita/eliminação no Obsidian, shell, ciclo de vida de containers ou deployment.
 - O perfil é gerido pelo Docker MCP Toolkit e guardado na configuração local do utilizador. Foi guardada uma cópia em `C:\Users\kjonh\workspace\drisa\backups\`; não a incluas no repositório, pois pode conter configuração local.
 - As skills estão instaladas em `C:\Users\kjonh\.hermes\skills\drisa-docker-mcp\` e `C:\Users\kjonh\.hermes\skills\drisa-context-management\`.
 
@@ -25,7 +25,10 @@ O script de inspeção mostra apenas nomes de ferramentas marcadas como leitura.
 - `github-official`: leitura de repositórios, ficheiros, commits, issues e pull requests.
 - `obsidian`: pesquisa, listagem e leitura; append, patch e delete estão desativados.
 - `youtube_transcript`: leitura de transcrições e metadados de vídeos.
-- `cloudflare-docs`: pesquisa de documentação e guias de migração.
+
+## Estado da gateway
+
+O perfil local continua disponível para inspeção, mas o handshake da gateway ainda não foi validado. Em 2026-11-14, `docker mcp secret ls` devolveu `deadline_exceeded` ao chamar `ResolverService/GetSecrets`. `McpManagementService` estava ativo; reiniciá-lo com UAC não resolveu o timeout. `docker mcp gateway run --profile drisa --dry-run --verbose` também ficou à espera do resolvedor. Depois de o Docker Desktop Secret Engine voltar a responder, repete esse dry-run e valida uma nova sessão Hermes/Drisa.
 
 ## Segurança
 
