@@ -1,0 +1,91 @@
+# Iku Auth — arquitetura de implementação
+
+## Estado atual
+
+O `iku-auth` está instalado no VPS e o primeiro administrador concluiu o bootstrap com TOTP. A aplicação Android foi ligada ao serviço por uma ponte que valida o Firebase ID token e emite uma sessão Iku; uma APK instalada e a respetiva sessão foram confirmadas anteriormente no Redmi. Na verificação de 2026-11-14, o Redmi estava offline no Tailscale e ausente do ADB, por isso o estado atual da sessão e a reprodução de voz não puderam ser confirmados. O login local e Google do portal exige uma conta Iku ativa; o Google é trocado por uma sessão Iku. Nextcloud tem `user_oidc` configurado, enquanto n8n e LFM3 mantêm autenticação própria. O tailnet dá transporte privado, não uma sessão Iku partilhada.
+
+## Objetivos
+
+- Uma identidade local para o portal, a app Android e as APIs Iku.
+- Sessões e permissões controladas pelo Iku, com revogação e auditoria.
+- TOTP obrigatório para administradores.
+- Tokens de API distintos por dispositivo e com scopes mínimos.
+- Não depender do Firebase para autorizar acesso aos dados e serviços Iku.
+
+## Componentes e fronteiras
+
+```text
+Browser ── HTTPS/Tailscale ── Iku Portal ── ClusterIP ── Iku Auth ── SQLite PVC
+Android ── HTTPS/Tailscale ───────────────────────────────┘
+Traefik/auth gateway ── valida sessão/claims ── Nextcloud, n8n e outros serviços
+```
+
+- `iku-auth`: API privada no namespace `iku`; uma réplica, sem NodePort ou Ingress público.
+- `auth-db`: SQLite separado dos dados Nextcloud, guardado num PVC e copiado em backups cifrados.
+- `iku-portal`: formulário e páginas de conta; comunica com a API de auth apenas no servidor Next.js.
+- Android: a ponte Firebase → Iku está implementada; tokens de sessão ficam cifrados com Android Keystore. O login Firebase continua como prova de identidade durante a migração.
+- Gateway: valida sessão ou token e aplica roles/scopes antes de encaminhar pedidos.
+
+O cluster VPS atual é de nó único com armazenamento local. Por isso a base de dados começa com uma réplica e não oferece failover. O worker homelab pode alojar workloads sem estado; não mover a base de dados entre nós sem primeiro definir armazenamento replicado e backups com recuperação testada.
+
+## Identidade e migração Android
+
+- Email e palavra-passe local são a forma principal de autenticação.
+- O Auth cria as sessões Iku, aplica roles, MFA e revogação. Um Firebase ID token nunca vale como sessão Iku nem como autorização de serviço.
+- Durante a migração, o botão Google pode continuar como prova de identidade externa: o Auth verifica o token e troca-o por uma sessão Iku local; a autorização continua a vir das tabelas Iku. Remover esse caminho apenas depois de confirmar o primeiro login local no Android.
+- Não habilitar registo público. Criar a primeira conta `admin` através de um token aleatório de bootstrap, de uso único, fornecido por Secret e removido depois de concluído.
+- O admin tem de configurar TOTP antes de receber uma sessão com privilégios. Guardar os segredos TOTP cifrados e guardar hashes dos códigos de recuperação.
+
+## Sessões, tokens e proteção
+
+- Sessão web opaca, aleatória e revogável, persistida como hash no banco de dados; cookie `Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/`, com expiração limitada e rotação após autenticação/MFA.
+- Verificar `Origin` nas mutações web contra uma allowlist estrita com `https://app.iknowu.org` e `https://vps-4e5174e4.tail2931da.ts.net`; o portal público e o endpoint de gestão tailnet usam ambos a mesma API. Rejeitar qualquer outra origem e nunca aceitar credenciais ou tokens em query strings.
+- Android recebe access token de curta duração e refresh token rotativo. Guardar hash do refresh token, família, dispositivo, expiração e revogação; guardar o segredo apenas no Keystore no cliente.
+- Tokens de API têm prefixo identificável, hash no banco, nome de dispositivo, scopes, criação, última utilização, expiração e revogação. Mostrar o valor apenas uma vez.
+- Hash de palavra-passe com Argon2id e parâmetros atualizáveis; comparação de tempo constante para tokens. Limitar tentativas por IP e identificador, sem registar palavras-passe, códigos MFA ou tokens. A ponte Firebase valida assinatura RS256, issuer, audience, timestamps, provider e email verificado, usando certificados Google em cache; não consulta a revogação do refresh token Firebase.
+- Chaves de assinatura, credenciais bootstrap e chaves de cifragem chegam por Kubernetes Secret montado como ficheiro. Não usar ConfigMap, imagem, manifestos versionados ou logs para material secreto.
+
+## Modelo de dados
+
+`users`, `roles`, `user_roles`, `mfa_factors`, `recovery_codes`, `sessions`, `refresh_tokens`, `firebase_identities`, `api_tokens`, `user_invites`, `audit_events`, `login_attempts`.
+
+Guardar timestamps UTC e IDs aleatórios. Aplicar chaves estrangeiras e índices para utilizador, sessão, dispositivo, expiração e hash do token. Eventos de auditoria registam resultado, ação, utilizador quando conhecido, dispositivo/IP e data, nunca segredos nem conteúdo de prompts.
+
+## API inicial
+
+| Método e rota | Uso |
+| --- | --- |
+| `POST /v1/auth/bootstrap` | Cria a primeira conta admin e inicia configuração TOTP usando o token de uso único. |
+| `POST /v1/auth/bootstrap/verify-mfa` | Confirma TOTP e conclui o bootstrap do administrador. |
+| `POST /v1/auth/login` | Valida email/password e TOTP/código de recuperação; cria sessão web ou tokens Android. |
+| `GET /v1/auth/session` | Devolve identidade e permissões da sessão atual, sem segredos. |
+| `POST /v1/auth/refresh` | Roda refresh token do Android e revoga a utilização anterior. |
+| `POST /v1/auth/firebase/exchange` | Verifica Firebase ID token, liga apenas email verificado já provisionado no Iku, exige TOTP do admin e emite sessão Android Iku. |
+| `POST /v1/auth/logout` | Revoga a sessão e limpa cookie/token. |
+| `GET /v1/auth/admin/users` | Admin MFA: lista contas e convites sem expor hashes ou segredos. |
+| `POST /v1/auth/admin/invites` | Admin MFA: cria convite de uso único para uma conta `user`, válido 72 horas. |
+| `POST /v1/auth/admin/invites/revoke` | Admin MFA: revoga um convite pendente. |
+| `POST /v1/auth/invites/accept` | Cria a conta convidada com a palavra-passe escolhida; roles não vêm do cliente. |
+| `POST /v1/auth/admin/users/status` | Admin MFA: desativa/reativa uma conta; desativar revoga sessões e tokens. |
+
+Respostas de autenticação usam mensagens genéricas para não revelar se um email existe. Requerer HTTPS e `Content-Type: application/json`; limitar corpos e tempos de resposta.
+
+## SSO e rollout
+
+O portal é publicado por Cloudflare Tunnel e aplica a sessão Iku às suas rotas autenticadas. Nextcloud usa o provider OIDC do Iku. Isto ainda não cria uma sessão comum para todos os serviços: n8n e LFM3 mantêm as suas próprias credenciais e o tailnet é apenas transporte. Manter os logins próprios enquanto se concluem e verificam as integrações. O LFM3 e a Drisa mantêm também os seus tokens de serviço para autenticação máquina-a-máquina.
+
+O Nextcloud 35 suporta autenticação com um IdP OIDC externo através da app `user_oidc` ([documentação oficial](https://docs.nextcloud.com/server/stable/admin_manual/configuration_user/user_auth_oidc.html)). Em 2026-11-14, `user_oidc` 8.13.0 estava instalado e ativo; o provider `iku`, o client ID `nextcloud`, os mapeamentos de claims e o segredo de cliente estavam configurados. Discovery e o login normal responderam HTTP 200. O IdP do Iku implementa discovery, JWKS RS256, Authorization Code com PKCE, token e userinfo; por padrão, `sub` é o ID Iku estável. Um endpoint admin com MFA permite mapear um utilizador a um UID existente, como `ikuadmin`, sem criar outra conta nem perder os ficheiros. Falta concluir esse mapeamento através da sessão de administrador e validar um login real seguido de acesso aos ficheiros. Manter o login local Nextcloud até essa verificação de ponta a ponta.
+
+O n8n tem SSO nativo via OIDC/SAML apenas nos planos self-hosted Business ou Enterprise; Community, Starter e Pro não incluem SSO ([planos oficiais](https://n8n.io/pricing/)). A Deployment atual executa n8n 2.46.6 e não declara variáveis `N8N_LICENSE_*` ou `N8N_ENTERPRISE_*`; isto não prova por si só a ausência de uma licença guardada noutro local. Confirmar a licença ativa antes de desenhar a integração. Sem licença compatível, manter o login próprio do n8n; um proxy externo não deve ser descrito como SSO nem remover a autenticação interna.
+
+Rollout incremental:
+
+1. Implementar API, schema, bootstrap de uso único, TOTP, sessões, rate limit e testes de segurança. **Concluído.**
+2. Instalar `iku-auth` com PVC e Secrets no VPS. **Concluído; backup Restic diário cifrado para o homelab instalado, integridade verificada e uma base SQLite restaurada com `PRAGMA integrity_check=ok`.**
+3. Ligar o portal, verificar a exigência de sessão e concluir o primeiro bootstrap. **Concluído; bootstrap e TOTP confirmados na base de dados da VPS.**
+4. Integrar Android com sessão Iku e Keystore; validar migração Google sem tratar Firebase claims como autorização. **Concluído; login Firebase trocado por sessão Android Iku após confirmação TOTP no Redmi, e a sessão ativa foi confirmada no servidor.**
+5. Integrar os serviços externos. A administração local de utilizadores está implementada; Nextcloud tem o provider OIDC do Iku configurado, mas falta mapear a conta existente e verificar login e acesso aos ficheiros. O gateway de autenticação partilhada para os restantes serviços continua por ligar. O SSO nativo do n8n depende de licença Business/Enterprise.
+
+## Trade-offs e limites
+
+SQLite reduz consumo e manutenção para o uso single-user atual, mas exige uma réplica e backups consistentes. Um IdP completo como Keycloak ofereceria fluxos OAuth/OIDC prontos, com maior consumo e operação. Reavaliar PostgreSQL/HA quando houver mais utilizadores, concorrência ou necessidade de sobreviver à falha da VPS. O login web, MFA TOTP do administrador, sessões Android, revogação de sessões, administração de utilizadores, tokens de API e a ponte Firebase estão implementados. O provider OIDC do Nextcloud está configurado em produção; a validação do mapeamento da conta e do acesso aos ficheiros continua pendente. Convites só podem criar contas normais; promoção a admin continua restrita ao bootstrap/DB operacional. Gateway partilhado e SSO para n8n continuam por fazer até existir uma licença adequada.

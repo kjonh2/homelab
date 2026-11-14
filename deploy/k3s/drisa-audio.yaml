@@ -1,0 +1,335 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: drisa-audio-models
+  namespace: iku
+  labels:
+    app.kubernetes.io/name: drisa-audio
+    app.kubernetes.io/part-of: iku
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 8Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: drisa-audio-server
+  namespace: iku
+  labels:
+    app.kubernetes.io/name: drisa-audio
+    app.kubernetes.io/part-of: iku
+data:
+  server.json: |
+    {
+      "host": "0.0.0.0",
+      "port": 8080,
+      "backend": "cpu",
+      "threads": 3,
+      "lazy_load": true,
+      "ui_management": true,
+      "max_loaded_models": 2,
+      "log_request_body": false,
+      "max_request_body_bytes": 8388608,
+      "models": [
+        {
+          "id": "moss",
+          "family": "moss_transcribe_diarize",
+          "path": "/app/models/MOSS-Transcribe-Diarize-GGUF",
+          "task": "asr",
+          "mode": "offline"
+        },
+        {
+          "id": "parakeet",
+          "family": "parakeet_tdt",
+          "path": "/app/models/Parakeet-TDT-0.6B-v3-GGUF",
+          "task": "asr",
+          "mode": "offline"
+        },
+        {
+          "id": "kokoro",
+          "family": "kokoro_tts",
+          "path": "/app/models/Kokoro-82M-GGUF",
+          "task": "tts",
+          "mode": "offline",
+          "default_voice_preset": { "voice_id": "pf_dora" }
+        }
+      ]
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: drisa-audio
+  namespace: iku
+  labels:
+    app.kubernetes.io/name: drisa-audio
+    app.kubernetes.io/part-of: iku
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: drisa-audio
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: drisa-audio
+        app.kubernetes.io/part-of: iku
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 45
+      nodeSelector:
+        kubernetes.io/hostname: homelab
+      tolerations:
+        - key: homelab.role
+          operator: Equal
+          value: fallback
+          effect: NoSchedule
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: drisa-audio-models
+        - name: config
+          configMap:
+            name: drisa-audio-server
+            defaultMode: 0444
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+      initContainers:
+        - name: install-moss
+          image: ghcr.io/0xshug0/audio.cpp@sha256:15941f22b16d6cfab94cae5e34ddd5e05c9e3087df51c9d5f98b98fe343b2401
+          imagePullPolicy: IfNotPresent
+          command: ["/app/entrypoint.sh"]
+          args: ["model-manager", "install", "moss_transcribe_diarize_q4_k", "--models-dir", "/app/models"]
+          env:
+            - name: HOME
+              value: /tmp
+            - name: TMPDIR
+              value: /tmp
+          volumeMounts:
+            - name: models
+              mountPath: /app/models
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+        - name: install-parakeet
+          image: ghcr.io/0xshug0/audio.cpp@sha256:15941f22b16d6cfab94cae5e34ddd5e05c9e3087df51c9d5f98b98fe343b2401
+          imagePullPolicy: IfNotPresent
+          command: ["/app/entrypoint.sh"]
+          args: ["model-manager", "install", "parakeet_tdt_q8_0", "--models-dir", "/app/models"]
+          env:
+            - name: HOME
+              value: /tmp
+            - name: TMPDIR
+              value: /tmp
+          volumeMounts:
+            - name: models
+              mountPath: /app/models
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+        - name: install-kokoro
+          image: ghcr.io/0xshug0/audio.cpp@sha256:15941f22b16d6cfab94cae5e34ddd5e05c9e3087df51c9d5f98b98fe343b2401
+          imagePullPolicy: IfNotPresent
+          command: ["/app/entrypoint.sh"]
+          args: ["model-manager", "install", "kokoro_82m_q8_0", "--models-dir", "/app/models"]
+          env:
+            - name: HOME
+              value: /tmp
+            - name: TMPDIR
+              value: /tmp
+          volumeMounts:
+            - name: models
+              mountPath: /app/models
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+        - name: install-espeak-runtime
+          image: docker.io/library/ubuntu@sha256:2198e4c65076e9cb0b3d695219df667c0e3b0072da64ca3c2648aca17dcecaf5
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              target=/app/models/.runtime/espeak
+              libdir="$target/usr/lib/x86_64-linux-gnu"
+              if [ -f "$libdir/libespeak-ng.so.1" ] && [ -d "$libdir/espeak-ng-data" ]; then
+                exit 0
+              fi
+              mkdir -p /tmp/apt-lists/partial "$target"
+              chmod 1777 /tmp/apt-lists /tmp/apt-lists/partial
+              cd /tmp
+              apt-get -o Dir::State::lists=/tmp/apt-lists update
+              apt-get -o Dir::State::lists=/tmp/apt-lists download libespeak-ng1 espeak-ng-data libpcaudio0 libsonic0
+              for package in /tmp/*.deb; do dpkg-deb -x "$package" "$target"; done
+              test -f "$libdir/libespeak-ng.so.1"
+              test -d "$libdir/espeak-ng-data"
+          env:
+            - name: HOME
+              value: /tmp
+            - name: TMPDIR
+              value: /tmp
+          volumeMounts:
+            - name: models
+              mountPath: /app/models
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 768Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      containers:
+        - name: server
+          image: ghcr.io/0xshug0/audio.cpp@sha256:15941f22b16d6cfab94cae5e34ddd5e05c9e3087df51c9d5f98b98fe343b2401
+          imagePullPolicy: IfNotPresent
+          command: ["/app/entrypoint.sh"]
+          args: ["server", "--config", "/etc/audio.cpp/server.json", "--no-ui", "--log"]
+          env:
+            - name: HOME
+              value: /tmp
+            - name: TMPDIR
+              value: /tmp
+            - name: LD_LIBRARY_PATH
+              value: /app/models/.runtime/espeak/usr/lib/x86_64-linux-gnu
+            - name: AUDIOCPP_ESPEAK_LIBRARY
+              value: /app/models/.runtime/espeak/usr/lib/x86_64-linux-gnu/libespeak-ng.so.1
+            - name: AUDIOCPP_ESPEAK_DATA
+              value: /app/models/.runtime/espeak/usr/lib/x86_64-linux-gnu/espeak-ng-data
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          volumeMounts:
+            - name: models
+              mountPath: /app/models
+            - name: config
+              mountPath: /etc/audio.cpp
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 120
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "3"
+              memory: 4Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: drisa-audio
+  namespace: iku
+  labels:
+    app.kubernetes.io/name: drisa-audio
+    app.kubernetes.io/part-of: iku
+spec:
+  type: ClusterIP
+  clusterIP: 10.43.200.200
+  selector:
+    app.kubernetes.io/name: drisa-audio
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: drisa-audio
+  namespace: iku
+  labels:
+    app.kubernetes.io/part-of: iku
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: drisa-audio
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 10.42.1.1/32
+      ports:
+        - protocol: TCP
+          port: 8080

@@ -1,86 +1,79 @@
 package com.iknowu.app
 
-/**
- * Catálogo dos serviços apresentados no bloco "Atalhos de serviços".
- *
- * Para adicionar um novo serviço basta acrescentar uma entrada à lista:
- *     ServiceItem(id, nome, url, descricao, estado, estadoOk)
- * A grelha de cards gera-se automaticamente a partir desta lista.
- *
- * Os URLs são configuráveis: altera-os aqui (ou liga-os a settings remotas
- * no futuro) sem tocar no fragmento.
- */
+import android.content.Context
+import android.net.Uri
+
+/** Private service links. The user supplies the VPS MagicDNS HTTPS name once. */
 object ServiceCatalog {
+    private const val PREFS = "iku_private_services"
+    private const val SERVER_URL_KEY = "server_base_url"
+    private const val DEFAULT_SERVER_URL = "https://vps-4e5174e4.tail2931da.ts.net"
 
-    // URLs base configuráveis — editar aqui para apontar às instâncias reais.
-    const val URL_HERMES: String = "https://hermes.nousresearch.com"
-    const val URL_GRAFANA: String = "http://localhost:3000"
-    const val URL_N8N: String = "http://localhost:5678"
+    fun serverBaseUrl(context: Context): String = context
+        .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        .getString(SERVER_URL_KEY, DEFAULT_SERVER_URL)
+        .orEmpty()
 
-    // TODO(Kiko): preencher com os URLs reais das instâncias / páginas de gestão.
-    const val URL_OPENCLAW: String = "http://IP_DO_SERVIDOR:PORTA/openclaw"
-    const val URL_OPENCODE: String = "http://IP_DO_SERVIDOR:PORTA/opencode"
-    const val URL_ANTIGRAVITY: String = "http://IP_DO_SERVIDOR:PORTA/antigravity"
-    const val URL_MCPS: String = "http://IP_DO_SERVIDOR:PORTA/mcps"
+    fun saveServerBaseUrl(context: Context, baseUrl: String) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(SERVER_URL_KEY, baseUrl.trim().trimEnd('/'))
+            .apply()
+    }
 
-    val servicos: List<ServiceItem> = listOf(
-        ServiceItem(
-            id = "hermes",
-            nome = "Hermes",
-            url = URL_HERMES,
-            descricao = "Agente de IA",
-            estado = "Online",
-            estadoOk = true
-        ),
-        ServiceItem(
-            id = "grafana",
-            nome = "Grafana",
-            url = URL_GRAFANA,
-            descricao = "Dashboards e métricas",
-            estado = "Online",
-            estadoOk = true
-        ),
-        ServiceItem(
-            id = "n8n",
-            nome = "N8N",
-            url = URL_N8N,
-            descricao = "Automatização de fluxos",
-            estado = null,
-            estadoOk = true
-        ),
-        ServiceItem(
-            id = "openclaw",
-            nome = "OpenClaw",
-            url = URL_OPENCLAW,
-            descricao = "Claw Cloud",
-            estado = null,
-            estadoOk = true
-        ),
-        ServiceItem(
-            id = "opencode",
-            nome = "OpenCode",
-            url = URL_OPENCODE,
-            descricao = "Agente de código",
-            estado = null,
-            estadoOk = true
-        ),
-        ServiceItem(
-            id = "antigravity",
-            nome = "Antigravity",
-            url = URL_ANTIGRAVITY,
-            descricao = "IDE com IA",
-            estado = null,
-            estadoOk = true
-        ),
-        ServiceItem(
-            id = "mcps",
-            nome = "MCPs",
-            url = URL_MCPS,
-            descricao = "Gestão de MCP servers",
-            estado = null,
-            estadoOk = true
+    fun serviceUrl(context: Context, port: Int): String {
+        val baseUrl = serverBaseUrl(context)
+        if (baseUrl.isBlank()) return ""
+        val parsed = Uri.parse(baseUrl)
+        val host = parsed.host ?: return ""
+        val authority = if (port == 443) host else "$host:$port"
+        return parsed.buildUpon()
+            .scheme("https")
+            .encodedAuthority(authority)
+            .path("")
+            .clearQuery()
+            .fragment(null)
+            .build()
+            .toString()
+            .trimEnd('/')
+    }
+
+    fun servicos(context: Context): List<ServiceItem> {
+        val configured = serverBaseUrl(context).isNotBlank()
+        val pendingLabel = if (configured) "Ligação por verificar" else "Configurar acesso"
+        return listOf(
+            ServiceItem(
+                id = "portal",
+                nome = "Iku Portal",
+                url = serviceUrl(context, 443),
+                descricao = "Painel do teu homelab",
+                estado = pendingLabel,
+                estadoOk = false
+            ),
+            ServiceItem(
+                id = "cloud",
+                nome = "Iku Cloud",
+                url = serviceUrl(context, 8444),
+                descricao = "Ficheiros e espaço pessoal",
+                estado = pendingLabel,
+                estadoOk = false
+            ),
+            ServiceItem(
+                id = "n8n",
+                nome = "Automações",
+                url = serviceUrl(context, 8443),
+                descricao = "Workflows com n8n",
+                estado = pendingLabel,
+                estadoOk = false
+            ),
+            ServiceItem(
+                id = "lfm3",
+                nome = "Modelos LFM3",
+                url = serviceUrl(context, 8445),
+                descricao = "API privada · texto e Omni",
+                estado = pendingLabel,
+                estadoOk = false
+            )
         )
-        // Exemplo de nova entrada:
-        // ServiceItem("homeassistant", "Home Assistant", "http://IP_DO_SERVIDOR:8123", "Casa", "Online", true)
-    )
+    }
 }

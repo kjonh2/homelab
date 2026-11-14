@@ -1,0 +1,210 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: iku-backup-restore-check
+  namespace: iku-backup
+  labels:
+    app.kubernetes.io/name: iku-backup-client
+    app.kubernetes.io/part-of: iku
+spec:
+  schedule: "17 5 1 * *"
+  timeZone: Europe/Paris
+  suspend: false
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 86400
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    metadata:
+      labels:
+        app.kubernetes.io/name: iku-backup-client
+        app.kubernetes.io/part-of: iku
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 7200
+      ttlSecondsAfterFinished: 604800
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: iku-backup-client
+            app.kubernetes.io/part-of: iku
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          nodeSelector:
+            kubernetes.io/hostname: vps-4e5174e4
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 70
+            runAsGroup: 70
+            fsGroup: 70
+            fsGroupChangePolicy: OnRootMismatch
+            seccompProfile:
+              type: RuntimeDefault
+          initContainers:
+            - name: restore
+              image: restic/restic:0.19.1
+              imagePullPolicy: IfNotPresent
+              command: ["/bin/sh", "-ec"]
+              args:
+                - |
+                  restic restore latest --target /restore \
+                    --include /sqlite-backups/iku-auth.sqlite3 \
+                    --include /sqlite-backups/n8n.sqlite3 \
+                    --include /sqlite-backups/nextcloud.sqlite3 \
+                    --include /sqlite-backups/k3s-state.sqlite3 \
+                    --include /sqlite-backups/drisa-memory.dump
+              env:
+                - name: RESTIC_REPOSITORY
+                  value: rest:http://iku-backup-server.iku-backup.svc.cluster.local:8000/iku-backup
+                - name: RESTIC_REST_USERNAME
+                  value: iku-backup
+                - name: RESTIC_REST_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: iku-backup-credentials
+                      key: rest-server-password
+                - name: RESTIC_PASSWORD_FILE
+                  value: /run/secrets/backup/restic-password
+                - name: HOME
+                  value: /tmp
+              volumeMounts:
+                - name: credentials
+                  mountPath: /run/secrets/backup
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+                - name: restore
+                  mountPath: /restore
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  cpu: 1000m
+                  memory: 1Gi
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 70
+                runAsGroup: 70
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+            - name: verify-drisa-memory-dump
+              image: postgres:18.6-alpine3.24@sha256:300ebd02c6d4de9ee27ad7f6855d5d21b4d3a4a5117767c1197d284c635d9736
+              imagePullPolicy: IfNotPresent
+              command: ["/bin/sh", "-ec"]
+              args:
+                - |
+                  scratch=$(mktemp -d /tmp/drisa-restore.XXXXXX)
+                  export PGDATA="$scratch/data"
+                  export PGHOST="$scratch"
+                  export PGPORT=55432
+                  export PGUSER=drisa_restore
+                  mkdir -p "$PGDATA"
+                  cleanup() { pg_ctl -D "$PGDATA" -m fast -w stop >/dev/null 2>&1 || true; }
+                  trap cleanup EXIT
+                  initdb -D "$PGDATA" --username="$PGUSER" --auth-local=trust --auth-host=reject
+                  pg_ctl -D "$PGDATA" -l "$scratch/postgres.log" \
+                    -o "-c listen_addresses='' -c unix_socket_directories=$scratch -p $PGPORT" -w start
+                  createdb drisa_restore_check
+                  pg_restore --exit-on-error --no-owner --dbname=drisa_restore_check \
+                    /restore/sqlite-backups/drisa-memory.dump
+                  counts=$(psql --no-psqlrc --set=ON_ERROR_STOP=1 --dbname=drisa_restore_check \
+                    --tuples-only --no-align \
+                    --command="SELECT (SELECT count(*) FROM drisa_messages), (SELECT count(*) FROM drisa_conversations);")
+                  case "$counts" in
+                    *'|'*) ;;
+                    *) echo "Could not read restored Drisa tables" >&2; exit 1 ;;
+                  esac
+                  messages=${counts%%|*}
+                  conversations=${counts#*|}
+                  case "$messages:$conversations" in
+                    *[!0-9:]*|:*|*:) echo "Invalid restored Drisa row counts" >&2; exit 1 ;;
+                  esac
+                  printf 'Disposable Drisa PostgreSQL restore row counts: messages=%s conversations=%s\n' "$messages" "$conversations"
+              env:
+                - name: HOME
+                  value: /tmp
+              volumeMounts:
+                - name: restore
+                  mountPath: /restore
+                  readOnly: true
+                - name: postgres-tmp
+                  mountPath: /tmp
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 1000m
+                  memory: 1Gi
+              securityContext:
+                runAsUser: 70
+                runAsGroup: 70
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+          containers:
+            - name: verify
+              image: python:3.12-alpine
+              imagePullPolicy: IfNotPresent
+              command: ["python3", "-c"]
+              args:
+                - |
+                  import pathlib, sqlite3
+                  root = pathlib.Path('/restore/sqlite-backups')
+                  for name in ('iku-auth', 'n8n', 'nextcloud', 'k3s-state'):
+                      path = root / f'{name}.sqlite3'
+                      if not path.is_file() or path.stat().st_size == 0:
+                          raise SystemExit(f'Missing or empty restored database: {path}')
+                      # The restored copies are immutable snapshots; this also
+                      # allows read-only validation of WAL-mode databases.
+                      db = sqlite3.connect(f'file:{path}?mode=ro&immutable=1', uri=True)
+                      try:
+                          result = db.execute('PRAGMA integrity_check').fetchone()
+                      finally:
+                          db.close()
+                      if not result or result[0] != 'ok':
+                          raise SystemExit(f'SQLite integrity check failed: {name}: {result}')
+                      print(f'Restored SQLite integrity check: {name}: ok', flush=True)
+              volumeMounts:
+                - name: restore
+                  mountPath: /restore
+                  readOnly: true
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 70
+                runAsGroup: 70
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+          volumes:
+            - name: credentials
+              secret:
+                secretName: iku-backup-credentials
+                defaultMode: 0440
+                items:
+                  - key: rest-server-password
+                    path: rest-server-password
+                  - key: restic-password
+                    path: restic-password
+            - name: tmp
+              emptyDir:
+                sizeLimit: 256Mi
+            - name: postgres-tmp
+              emptyDir:
+                sizeLimit: 1Gi
+            - name: restore
+              emptyDir:
+                sizeLimit: 8Gi

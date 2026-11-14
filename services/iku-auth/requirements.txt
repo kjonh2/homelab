@@ -1,0 +1,5 @@
+fastapi==0.162.4
+uvicorn==0.54.0
+argon2-cffi==25.1.0
+cryptography==50.0.2
+PyJWT[crypto]==2.15.1

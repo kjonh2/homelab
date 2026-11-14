@@ -1,8 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="services_drisa_voice">Falar com a Drisa</string>
     <!-- Bloco "Atalhos de serviços" (PT-PT) — ficheiro autónomo para evitar conflitos -->
     <string name="services_titulo">Atalhos de serviços</string>
     <string name="services_subtitulo">Serviços e ferramentas</string>
     <string name="services_sem_browser">Nenhum browser instalado</string>
     <string name="services_url_indisponivel">URL do serviço ainda não configurado</string>
+    <string name="services_configurar_botao">Configurar acesso privado</string>
+    <string name="services_configurar_titulo">Servidor Iku privado</string>
+    <string name="services_configurar_descricao">Introduz o nome HTTPS MagicDNS da VPS (por exemplo, https://vps.tailnet.ts.net). A aplicação requer ligação ao Tailscale.</string>
+    <string name="services_guardar">Guardar</string>
+    <string name="services_limpar">Limpar</string>
+    <string name="services_url_invalido">Introduz um URL HTTPS válido sem caminho, utilizador, palavra-passe ou query.</string>
 </resources>

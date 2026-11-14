@@ -1,0 +1,176 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: lfm3-model-cache
+  labels:
+    app.kubernetes.io/part-of: iku
+spec:
+  capacity:
+    storage: 4Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  local:
+    path: /opt/iku/models
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - vps-4e5174e4
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: lfm3-model-cache
+  namespace: iku
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 3Gi
+  storageClassName: ""
+  volumeName: lfm3-model-cache
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lfm3-server
+  namespace: iku
+  labels:
+    app.kubernetes.io/name: lfm3-server
+    app.kubernetes.io/part-of: iku
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lfm3-server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: lfm3-server
+        app.kubernetes.io/part-of: iku
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: llama-server
+          image: ghcr.io/ggml-org/llama.cpp:server-b12242@sha256:4d2de15a0ffbce704777c64026b40512a71e0bbc0b303a5fe5ea9bf71760dff9
+          imagePullPolicy: IfNotPresent
+          args:
+            - --models-dir
+            - /models
+            - --models-max
+            - "1"
+            - --no-models-autoload
+            - --reasoning
+            - "off"
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8080"
+            - --threads
+            - "4"
+            - --ctx-size
+            - "4096"
+            - --parallel
+            - "1"
+            - --n-gpu-layers
+            - "0"
+            - --api-key-file
+            - /run/secrets/llama/api-key
+          env:
+            - name: HOME
+              value: /tmp
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          resources:
+            requests:
+              cpu: "2"
+              memory: 2Gi
+            limits:
+              cpu: "4"
+              memory: 4Gi
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: model-cache
+              mountPath: /models
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            - name: api-key
+              mountPath: /run/secrets/llama
+              readOnly: true
+      volumes:
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: lfm3-model-cache
+        - name: tmp
+          emptyDir:
+            sizeLimit: 512Mi
+        - name: api-key
+          secret:
+            secretName: lfm3-api
+            defaultMode: 0440
+            items:
+              - key: LLAMA_API_KEY
+                path: api-key
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lfm3-api
+  namespace: iku
+  labels:
+    app.kubernetes.io/part-of: iku
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: lfm3-server
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
