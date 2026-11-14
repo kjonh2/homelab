@@ -35,6 +35,95 @@ class ModelManagementErrorTests(unittest.TestCase):
                         gateway._mcp_tool("list_models", {"kind": "llm"})
 
 
+class ModelCatalogTests(unittest.TestCase):
+    def test_pc_catalog_filters_image_models_and_reports_loaded_state(self):
+        with (
+            patch.object(gateway, "_mcp_tool", return_value={"models": [
+                {"id": "AtomicChat/LFM3-1.7B-Uncensored-GGUF", "loaded": True},
+                {"id": "flux-3-image", "loaded": False},
+            ]}) as mcp_tool,
+            patch.object(gateway, "load_config", return_value={
+                "llm_host": "pc", "llm_model": "AtomicChat/LFM3-1.7B-Uncensored-GGUF",
+            }),
+        ):
+            result = gateway.model_catalog("pc", "llm")
+
+        self.assertEqual(mcp_tool.call_args.args, ("list_models", {"kind": "llm", "source": "local", "loaded_only": False}))
+        self.assertEqual(result["selected"], "AtomicChat/LFM3-1.7B-Uncensored-GGUF")
+        self.assertEqual(result["models"], [{"id": "AtomicChat/LFM3-1.7B-Uncensored-GGUF", "loaded": True}])
+
+    def test_vps_catalog_reports_available_and_loaded_models(self):
+        import requests
+
+        class FakeResponse:
+            @staticmethod
+            def raise_for_status():
+                return None
+
+            @staticmethod
+            def json():
+                return {"data": [
+                    {"id": "lfm3-omni", "loaded": False},
+                    {"id": "lfm3-uncensored", "status": {"value": "loaded"}},
+                ]}
+
+        with tempfile.TemporaryDirectory(prefix="drisa-vps-catalog-test-") as directory:
+            key_file = Path(directory) / "iku_lfm3.key"
+            key_file.write_text("test-vps-key", encoding="utf-8")
+            with (
+                patch.object(gateway, "BASE", Path(directory)),
+                patch.object(gateway, "load_config", return_value={"llm_host": "vps", "llm_model": "lfm3-uncensored"}),
+                patch.object(requests, "get", return_value=FakeResponse()) as get,
+            ):
+                result = gateway.model_catalog("vps", "llm")
+
+        self.assertEqual(get.call_args.args[0], gateway._VPS_MODELS_URL)
+        self.assertEqual(get.call_args.kwargs["headers"]["Authorization"], "Bearer test-vps-key")
+        self.assertEqual(result["selected"], "lfm3-uncensored")
+        self.assertEqual(result["models"], [
+            {"id": "lfm3-omni", "loaded": False},
+            {"id": "lfm3-uncensored", "loaded": True},
+        ])
+
+    def test_vps_model_load_uses_private_api_and_saves_selection(self):
+        import requests
+
+        class CatalogResponse:
+            @staticmethod
+            def raise_for_status():
+                return None
+
+            @staticmethod
+            def json():
+                return {"data": [{"id": "lfm3-text", "loaded": False}]}
+
+        class LoadResponse:
+            @staticmethod
+            def raise_for_status():
+                return None
+
+            @staticmethod
+            def json():
+                return {"success": True}
+
+        with tempfile.TemporaryDirectory(prefix="drisa-vps-load-test-") as directory:
+            (Path(directory) / "iku_lfm3.key").write_text("test-vps-key", encoding="utf-8")
+            with (
+                patch.object(gateway, "BASE", Path(directory)),
+                patch.object(gateway, "load_config", return_value={"llm_host": "vps", "llm_model": "lfm3-text"}),
+                patch.object(requests, "get", return_value=CatalogResponse()),
+                patch.object(requests, "post", return_value=LoadResponse()) as post,
+                patch.object(gateway, "_save_model_selection") as save_selection,
+            ):
+                result = gateway.load_model_for_app("vps", "llm", "lfm3-text")
+
+        self.assertEqual(result, "Modelo carregado na VPS.")
+        self.assertEqual(post.call_args.args[0], gateway._VPS_MODELS_URL + "/load")
+        self.assertEqual(post.call_args.kwargs["json"], {"model": "lfm3-text"})
+        self.assertEqual(post.call_args.kwargs["headers"]["Authorization"], "Bearer test-vps-key")
+        save_selection.assert_called_once_with("vps", "llm", "lfm3-text")
+
+
 class AudioPayloadTests(unittest.TestCase):
     @staticmethod
     def make_wav(payload: bytes) -> bytes:
