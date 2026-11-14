@@ -24,6 +24,21 @@ def _normalize_api_model_id(model: str, host: str) -> str:
     return selected
 
 
+def _audio_request_may_still_be_running(error: Exception) -> bool:
+    """Do not issue a fallback request after an uncertain remote inference."""
+    try:
+        import requests
+    except ImportError:
+        return False
+    if isinstance(error, (requests.exceptions.Timeout, requests.exceptions.ConnectionError)):
+        return True
+    response = getattr(error, "response", None)
+    return (
+        isinstance(error, requests.exceptions.HTTPError)
+        and getattr(response, "status_code", None) == 503
+    )
+
+
 class SpeechProcessor:
     _whisper_lock = threading.Lock()  # Only 1 transcription at a time
     _whisper_model = None
@@ -98,6 +113,12 @@ class SpeechProcessor:
                     return result
                 logger.warning("STT principal %s sem texto", primary_model)
             except Exception as e:
+                if _audio_request_may_still_be_running(e):
+                    logger.warning(
+                        "STT principal %s ficou pendente no servidor; a omitir fallback para evitar inferências simultâneas",
+                        primary_model,
+                    )
+                    return {"text": "", "confidence": 0.0, "success": False, "error": "audio backend busy"}
                 logger.warning("STT principal %s falhou (%s)", primary_model, e)
             if fallback_model != primary_model:
                 try:

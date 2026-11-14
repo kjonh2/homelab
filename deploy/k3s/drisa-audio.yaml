@@ -29,8 +29,9 @@ data:
       "backend": "cpu",
       "threads": 3,
       "lazy_load": true,
+      "busy_timeout_ms": 120000,
       "ui_management": true,
-      "max_loaded_models": 2,
+      "max_loaded_models": 1,
       "log_request_body": false,
       "max_request_body_bytes": 8388608,
       "models": [

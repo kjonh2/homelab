@@ -41,9 +41,13 @@ BRIDGE_RESP = BASE / "drisa_response.tmp"
 MAX_AUDIO_BYTES = 6 * 1024 * 1024
 MAX_AUDIO_BASE64_CHARS = ((MAX_AUDIO_BYTES + 2) // 3) * 4
 MAX_WEBSOCKET_MESSAGE_BYTES = 8 * 1024 * 1024
-STT_TIMEOUT_SECONDS = 180
+STT_TIMEOUT_SECONDS = 210
 LLM_TIMEOUT_SECONDS = 120
 TTS_TIMEOUT_SECONDS = 150
+
+
+class AudioBackendBusyError(RuntimeError):
+    """The audio server may still be processing the previous inference."""
 
 RECORDINGS.mkdir(exist_ok=True)
 VAULT.mkdir(parents=True, exist_ok=True)
@@ -472,6 +476,7 @@ def _ensure_homelab_model(requests, base_url: str, headers: dict, model_id: str)
 
 def unsloth_transcribe(wav_path: Path, model: str | None = None) -> str:
     """STT via Unsloth OpenAI-compatible endpoint."""
+    is_homelab = False
     try:
         import requests
         cfg = _unsloth_cfg()
@@ -484,7 +489,7 @@ def unsloth_transcribe(wav_path: Path, model: str | None = None) -> str:
             is_homelab = bool(cfg["audio_url"]) and base_url == cfg["audio_url"]
             if is_homelab:
                 _ensure_homelab_model(requests, base_url, headers, data["model"])
-            inference_timeout = 30 if is_homelab and data["model"] == "moss" else 120
+            inference_timeout = 180 if is_homelab and data["model"] == "moss" else 120
             r = requests.post(f"{base_url}/audio/transcriptions", headers=headers, files=files, data=data,
                               timeout=(5, inference_timeout))
             r.raise_for_status()
@@ -494,6 +499,19 @@ def unsloth_transcribe(wav_path: Path, model: str | None = None) -> str:
         payload = r.json()
         return (payload.get("text") or "").strip()
     except Exception as e:
+        if is_homelab and "requests" in locals():
+            response = getattr(e, "response", None)
+            is_busy = isinstance(
+                e,
+                (requests.exceptions.Timeout, requests.exceptions.ConnectionError),
+            ) or (
+                isinstance(e, requests.exceptions.HTTPError)
+                and getattr(response, "status_code", None) == 503
+            )
+            if is_busy:
+                raise AudioBackendBusyError(
+                    "Homelab audio inference is busy or its outcome is unknown; fallback suppressed."
+                ) from e
         print(f"[unsloth/stt] erro: {e}")
         return ""
 

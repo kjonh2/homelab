@@ -373,6 +373,16 @@ class AudioPayloadTests(unittest.TestCase):
             self.assertEqual(gateway.transcribe(Path("unused.wav")), "Texto reconhecido.")
         self.assertEqual([call.args[1] for call in transcribe.call_args_list], ["moss", "parakeet"])
 
+    def test_stt_does_not_fallback_when_homelab_inference_may_still_run(self):
+        with (
+            patch.object(gateway, "load_config", return_value={"stt_engine": "api", "fallback_local_stt": False}),
+            patch.object(gateway, "_unsloth_cfg", return_value={"stt_model": "moss", "fallback_stt_model": "parakeet"}),
+            patch.object(gateway, "unsloth_transcribe", side_effect=gateway.AudioBackendBusyError("busy")) as transcribe,
+        ):
+            with self.assertRaises(gateway.AudioBackendBusyError):
+                gateway.transcribe(Path("unused.wav"))
+        transcribe.assert_called_once_with(Path("unused.wav"), "moss")
+
     def test_unsloth_keeps_full_stt_package_ids(self):
         moss = "audio-cpp/audio.cpp-gguf/MOSS-Transcribe-Diarize-GGUF"
         parakeet = "audio-cpp/audio.cpp-gguf/Parakeet-TDT-0.6B-v3-GGUF"
