@@ -1,6 +1,6 @@
 # Drisa audio service and laptop Gaming mode
 
-Last checked: 2026-11-12. Audio service, laptop routing, LFM, and Kokoro were exercised. The Redmi was not connected over ADB, so physical phone validation remains pending.
+Last checked: 2026-11-14. Audio service and laptop loopback routing are reachable. The Redmi is offline on Tailscale and not connected over ADB, so physical phone validation remains pending.
 
 ## Intended layout
 
@@ -44,3 +44,5 @@ Invoke-RestMethod http://127.0.0.1:8766/v1/models
 - LFM on the VPS returned “Sistema pronto.” in 9.7 seconds. The LFM-plus-Kokoro gateway call completed in 54.5 seconds on the cold run; Kokoro audio was produced and the WAV was played locally.
 - The app's model catalog and load handlers were unit tested, but the Redmi was not connected for UI or full microphone validation. Do not treat the Android conversation path as verified until a physical-device test passes.
 - This service is private and ClusterIP-only. Do not open port 8080 or add a public ingress.
+
+At the 2026-11-14 live check, laptop `127.0.0.1:8766/health` and `/v1/models` returned HTTP 200 through the SSH forward; `127.0.0.1:8765` is the authenticated WebSocket gateway and returns HTTP 426 to a plain HTTP health probe. The audio API reported MOSS, Parakeet, and Kokoro configured, with Kokoro loaded and both transcription models unloaded. The homelab node was at 40% memory and the audio pod used 700 MiB; `max_loaded_models: 2` is intentional so lazy loading can switch ASR/TTS models without retaining all three on this small worker. Gaming mode is available but inactive (`drisa_mode.txt` is absent), so the laptop is in normal mode. This check confirms listener/tunnel reachability and model catalog state, not microphone-to-response behavior.
