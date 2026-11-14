@@ -452,6 +452,53 @@ class AudioPayloadTests(unittest.TestCase):
 
 
 class GatewayAsyncAudioTests(unittest.IsolatedAsyncioTestCase):
+    async def test_invalid_reauthentication_revokes_model_access(self):
+        config = {
+            "allowlist": ["trusted-device", "other-device"],
+            "policies": {
+                "trusted-device": {"transcribe": True, "reply": True},
+                "other-device": {"transcribe": True, "reply": True},
+            },
+            "unknown": {"transcribe": False, "reply": False},
+        }
+
+        class FakeWebSocket:
+            remote_address = "test"
+
+            def __init__(self):
+                self.messages = iter([
+                    json.dumps({"type": "hello", "device_id": "trusted-device", "token": "test-token"}),
+                    json.dumps({"type": "hello", "device_id": "other-device", "token": "wrong-token"}),
+                    json.dumps({"type": "models_list", "request_id": "catalog", "host": "vps", "category": "llm"}),
+                ])
+                self.sent = []
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                try:
+                    return next(self.messages)
+                except StopIteration:
+                    raise StopAsyncIteration
+
+            async def send(self, message):
+                self.sent.append(json.loads(message))
+
+        socket = FakeWebSocket()
+        with (
+            patch.object(gateway, "load_config", return_value=config),
+            patch.object(gateway, "load_token", return_value="test-token"),
+            patch.object(gateway, "model_catalog") as catalog,
+            patch.object(gateway, "log_to_obsidian"),
+        ):
+            await asyncio.wait_for(gateway.handle_client(socket), timeout=2)
+
+        self.assertEqual([message["type"] for message in socket.sent], ["auth", "auth", "model_operation"])
+        self.assertEqual(socket.sent[1]["ok"], False)
+        self.assertEqual(socket.sent[2]["ok"], False)
+        catalog.assert_not_called()
+
     async def test_slow_inference_does_not_block_websocket_event_loop(self):
         wav = b"RIFF" + struct.pack("<I", 4) + b"WAVE"
         config = {

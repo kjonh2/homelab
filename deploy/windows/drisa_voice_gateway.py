@@ -705,6 +705,8 @@ async def handle_client(ws):
         mtype = msg.get("type")
 
         if mtype == "hello":
+            # A new handshake must never inherit an earlier authenticated state.
+            authed = False
             device_id = str(msg.get("device_id", "unknown"))[:64]
             user = str(msg.get("user", device_id))[:64]
             candidate = msg.get("token")
