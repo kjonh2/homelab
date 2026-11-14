@@ -2,7 +2,7 @@
 
 ## Estado atual
 
-O `iku-auth` está instalado no VPS e o primeiro administrador concluiu o bootstrap com TOTP. A aplicação Android foi ligada ao serviço por uma ponte que valida o Firebase ID token e emite uma sessão Iku; uma APK instalada e a respetiva sessão foram confirmadas anteriormente no Redmi. Na verificação de 2026-11-14, o Redmi estava offline no Tailscale e ausente do ADB, por isso o estado atual da sessão e a reprodução de voz não puderam ser confirmados. O login local e Google do portal exige uma conta Iku ativa; o Google é trocado por uma sessão Iku. Nextcloud tem `user_oidc` configurado, enquanto n8n e LFM3 mantêm autenticação própria. O tailnet dá transporte privado, não uma sessão Iku partilhada.
+O `iku-auth` está instalado no VPS e o primeiro administrador concluiu o bootstrap com TOTP. A aplicação Android foi ligada ao serviço por uma ponte que valida o Firebase ID token e emite uma sessão Iku; uma APK e uma sessão foram confirmadas anteriormente no Redmi. Na revalidação de 2026-11-14, o Redmi estava online no Tailscale e ADB e tinha o ecrã Drisa em primeiro plano. A permissão `RECORD_AUDIO` está autorizada, mas o MIUI cancelou a atualização da APK e não foi observada uma gravação ativa nem playback. O estado da sessão e o SSO do Nextcloud ainda precisam de validação interativa. O login local e Google do portal exige uma conta Iku ativa; o Google é trocado por uma sessão Iku. Nextcloud tem `user_oidc` configurado, enquanto n8n e LFM3 mantêm autenticação própria. O tailnet dá transporte privado, não uma sessão Iku partilhada.
 
 ## Objetivos
 

@@ -30,6 +30,8 @@ As três variantes foram carregadas e medidas sequencialmente na VPS, sem modelo
 
 Os testes usaram pedidos de texto; não medem entrada de áudio nem o percurso completo da Drisa. Depois dos testes, `lfm3-uncensored` foi restaurado como modelo selecionado e uma chamada final respondeu HTTP 200. A VPS mantém `--models-max 1`, pelo que só um destes modelos fica residente de cada vez.
 
+Na verificação adicional de 2026-11-14, o modelo já carregado `lfm3-uncensored` gerou 128 tokens em streaming: TTFT 1,35 s, descodificação 7,73 s (16,6 tokens/s) e 9,08 s para o pedido completo (14,1 tokens/s de parede). Este pedido curto confirma a rota e dá uma medição atual do modelo selecionado; não substitui a comparação anterior das três variantes. Logo após a chamada, o pod LFM3 usava 2061 MiB e o nó VPS estava a 64% de memória e 44% de CPU.
+
 Na medição de 2026-11-11, o cluster tinha um nó. A situação mudou em 2026-11-12: o cluster tem agora dois nós Ready, com a VPS como único control plane e o homelab como worker tainted. Isto não fornece alta disponibilidade do control plane. As PVCs usam armazenamento local e não substituem backups. O estado mais recente está abaixo.
 
 Em 2026-11-12, a partir do portátil ligado ao tailnet, o portal redirecionou `/` para `/login` (307) e `/login` respondeu 200; n8n `/healthz`, Nextcloud `/status.php` e LFM3 `/health` responderam 200 nas portas privadas `8443`, `8444` e `8445`. Isto confirma as rotas HTTPS tailnet-only em funcionamento. Os Services Kubernetes continuam ClusterIP; estes resultados não substituem a auditoria das regras públicas do firewall.
@@ -42,7 +44,7 @@ Em 2026-11-12, a partir do portátil ligado ao tailnet, o portal redirecionou `/
 - `unattended-upgrades` está ativo; não havia reinício pendente durante a verificação.
 - `fail2ban` está inativo; a proteção de SSH observada é a regra `LIMIT` do UFW combinada com autenticação por chave.
 
-## Estado atual do cluster — 2026-11-12
+## Estado do cluster após expansão — 2026-11-12
 
 Medição de `kubectl top` após o homelab entrar como worker e o site estático ser distribuído pelos dois nós:
 
@@ -50,3 +52,9 @@ Medição de `kubectl top` após o homelab entrar como worker e o site estático
 - Homelab: Intel Pentium J3710 de 4 cores e 7,6 GiB; 271m CPU (6%) e 3144 MiB de memória usados (40%). Aloja o servidor Restic e uma réplica Nginx/Cloudflare do site.
 - `iku-public-site` está `2/2 Running` em cada réplica: uma no nó VPS e outra no homelab. `iknowu.org/` e `app.iknowu.org/login` devolveram 200 pela Cloudflare; cada conector registou quatro ligações HTTP/2. A ligação QUIC UDP falhou na pré-verificação, pelo que o cloudflared continua através de HTTP/2.
 - Auth, portal, PostgreSQL, Nextcloud, n8n e LFM3 continuam no VPS. O homelab é backup/worker, não control plane de substituição; o failover completo do site durante indisponibilidade do VPS ainda não foi testado.
+
+## Revalidação do cluster — 2026-11-14
+
+Via SSH Tailscale à VPS, ambos os nós reportaram `Ready` em K3s `v1.37.2+k3s1`; `vps-4e5174e4` é control plane e `homelab` é worker. Todos os pods de aplicação estavam `Running` e sem reinícios; os Jobs concluídos de backup/restore estavam `Completed`; os 11 PVCs estavam `Bound`. Após o pedido de benchmark LFM3, `lfm3-server` usava 2061 MiB e o pod de áudio 3 MiB. A amostra `kubectl top` indicou VPS 1770m CPU/4981 MiB (44%/64%) e homelab 691m/2174 MiB (17%/27%); os valores são instantâneos.
+
+Na mesma revalidação, as rotas públicas `iknowu.org/`, `app.iknowu.org/login` e `cloud.iknowu.org/index.php/login` responderam HTTP 200. As rotas privadas da VPS também responderam 200: n8n `/healthz` na 8443, Nextcloud `/status.php` na 8444 e LFM3 `/health` na 8445. Isto confirma disponibilidade HTTP, não a autenticação interativa nem o SSO do Nextcloud.
