@@ -86,7 +86,7 @@ jobs:
       - name: Install Android 17 preview SDK packages
         run: >-
           sdkmanager --channel=3 --install
-          "platforms;android-37"
+          "platforms;android-37.0"
           "build-tools;37.0.0"
           "ndk;28.2.13676358"
           "cmake;3.22.1"
@@ -94,5 +94,6 @@ jobs:
       - name: Build modern Android APK
         working-directory: android
         run: ./gradlew --no-daemon :app:assembleModernDebug
+
 
 
