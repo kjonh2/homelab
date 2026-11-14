@@ -32,7 +32,13 @@ class AudioProcessor:
         self.energy_threshold = energy_threshold  # usado como clamp mínimo absoluto (0.3x)
         self.device = device
 
-        self.audio_queue = queue.Queue()
+        # The PortAudio callback must stay lightweight. VAD, file I/O, logging,
+        # and segmentation run on the consumer thread below.
+        self.audio_queue = queue.Queue(maxsize=200)
+        self._pending_audio_status = None
+        self._last_status_log = 0.0
+        self._last_bridge_write = 0.0
+        self._dropped_audio_frames = 0
         self.is_listening = False
         self.thread = None
         self.stream = None
@@ -148,68 +154,87 @@ class AudioProcessor:
         self.voice_frames_in_segment = 0
 
     def _capture_and_process(self):
-        """Capture audio using sounddevice and process with VAD (Discord-style gate)."""
+        """Queue microphone frames quickly; run VAD outside PortAudio's callback."""
         def callback(indata, frames, time_info, status):
             if status:
-                logger.warning(f"Audio status: {status}")
+                self._pending_audio_status = str(status)
             if not self.is_listening:
                 return
             if self.muted:
                 return  # anti-eco: durante o TTS nada entra no buffer
-
-            # Convert to mono float32
-            frame = indata[:, 0] if indata.shape[1] > 1 else indata.flatten()
-
-            # Energy check
-            energy = np.sqrt(np.mean(frame**2))
-
-            self._write_bridge(energy)
-
-            # Gate combinado: VAD ML E energia acima do noise floor dinâmico
-            if not self.is_speaking:
-                self._update_noise_floor(energy)
-
-            pcm_data = (frame * 32767).astype(np.int16).tobytes()
-            vad_says_speech = self.vad.is_speech(pcm_data, self.sample_rate)
-            is_voice = vad_says_speech and (energy > self.noise_floor)
-
-            if not self.is_speaking:
-                # Exigir 3 frames consecutivos de voz p/ abrir (anti latido/clique)
-                self.pending_open = self.pending_open + 1 if is_voice else 0
-                if self.pending_open >= self.open_frames_needed:
-                    self.is_speaking = True
-                    self.silence_frames = 0
-                    self.voice_frames_in_segment = self.pending_open
-                    logger.info(f"Speech started (noise_floor={self.noise_floor:.4f})")
-                else:
-                    # Pré-roll ring: guarda ~0.3s de contexto p/ não cortar o início
-                    self.speech_buffer.append(frame.copy())
-                    if len(self.speech_buffer) > 12:
-                        self.speech_buffer = self.speech_buffer[-10:]
-                return
-
-            # Em fala: apenda TUDO (voz + pausas naturais entre palavras)
-            self.speech_buffer.append(frame.copy())
-            if is_voice:
-                self.voice_frames_in_segment += 1
-                self.silence_frames = 0
-            else:
-                self.silence_frames += 1
-                if self.silence_frames >= self.max_silence_frames:
-                    self._emit_segment()
-                    return
-            if len(self.speech_buffer) >= self.max_segment_frames:
-                logger.info(
-                    "Speech segment reached %d seconds without confirmed silence; checking bounded chunk",
-                    self.max_segment_frames * self.frame_duration_ms // 1000,
-                )
-                self._emit_segment()
+            try:
+                self.audio_queue.put_nowait(indata.copy())
+            except queue.Full:
+                # Keep the stream live under load; discard the oldest frame.
+                try:
+                    self.audio_queue.get_nowait()
+                except queue.Empty:
+                    pass
+                self._dropped_audio_frames += 1
+                try:
+                    self.audio_queue.put_nowait(indata.copy())
+                except queue.Full:
+                    self._dropped_audio_frames += 1
 
         try:
             with sd.InputStream(device=self.device, samplerate=self.sample_rate,
                                 channels=1, dtype='float32', callback=callback,
                                 blocksize=self.frame_size):
                 while self.is_listening:
-                    sd.sleep(100)
+                    try:
+                        indata = self.audio_queue.get(timeout=0.1)
+                    except queue.Empty:
+                        continue
+                    now = time.monotonic()
+                    if self._pending_audio_status and now - self._last_status_log >= 5.0:
+                        logger.warning("Audio status: %s", self._pending_audio_status)
+                        self._pending_audio_status = None
+                        self._last_status_log = now
+                    if self._dropped_audio_frames and now - self._last_status_log >= 5.0:
+                        logger.warning("Audio queue dropped %d frames", self._dropped_audio_frames)
+                        self._dropped_audio_frames = 0
+                        self._last_status_log = now
+                    if self.muted:
+                        continue
+                    frame = indata[:, 0] if indata.shape[1] > 1 else indata.flatten()
+                    energy = np.sqrt(np.mean(frame**2))
+                    if now - self._last_bridge_write >= 0.25:
+                        self._write_bridge(energy)
+                        self._last_bridge_write = now
+
+                    if not self.is_speaking:
+                        self._update_noise_floor(energy)
+                    pcm_data = (frame * 32767).astype(np.int16).tobytes()
+                    vad_says_speech = self.vad.is_speech(pcm_data, self.sample_rate)
+                    is_voice = vad_says_speech and (energy > self.noise_floor)
+
+                    if not self.is_speaking:
+                        self.pending_open = self.pending_open + 1 if is_voice else 0
+                        if self.pending_open >= self.open_frames_needed:
+                            self.is_speaking = True
+                            self.silence_frames = 0
+                            self.voice_frames_in_segment = self.pending_open
+                            logger.info("Speech started (noise_floor=%.4f)", self.noise_floor)
+                        else:
+                            self.speech_buffer.append(frame.copy())
+                            if len(self.speech_buffer) > 12:
+                                self.speech_buffer = self.speech_buffer[-10:]
+                            continue
+
+                    self.speech_buffer.append(frame.copy())
+                    if is_voice:
+                        self.voice_frames_in_segment += 1
+                        self.silence_frames = 0
+                    else:
+                        self.silence_frames += 1
+                        if self.silence_frames >= self.max_silence_frames:
+                            self._emit_segment()
+                            continue
+                    if len(self.speech_buffer) >= self.max_segment_frames:
+                        logger.info(
+                            "Speech segment reached %d seconds without confirmed silence; checking bounded chunk",
+                            self.max_segment_frames * self.frame_duration_ms // 1000,
+                        )
+                        self._emit_segment()
         except Exception as e:
             logger.error(f"Audio capture error: {e}")
