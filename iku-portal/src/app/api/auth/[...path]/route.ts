@@ -3,6 +3,10 @@ import { NextRequest } from "next/server";
 export const dynamic = "force-dynamic";
 
 const routes = new Map<string, string>([
+  ["GET oidc/.well-known/openid-configuration", "oidc/.well-known/openid-configuration"],
+  ["GET oidc/jwks", "oidc/jwks"],
+  ["GET oidc/authorize", "oidc/authorize"],
+  ["GET oidc/userinfo", "oidc/userinfo"],
   ["GET session", "session"],
   ["GET sessions", "sessions"],
   ["GET api-tokens", "api-tokens"],
@@ -10,6 +14,7 @@ const routes = new Map<string, string>([
   ["POST bootstrap", "bootstrap"],
   ["POST bootstrap/verify-mfa", "bootstrap/verify-mfa"],
   ["POST firebase/exchange", "firebase/exchange"],
+  ["POST oidc/token", "oidc/token"],
   ["POST login", "login"],
   ["POST refresh", "refresh"],
   ["POST logout", "logout"],
@@ -36,12 +41,14 @@ async function proxy(request: NextRequest, path: string): Promise<Response> {
   const cookie = sessionCookie(request);
   if (contentType) headers.set("content-type", contentType);
   if (origin) headers.set("origin", origin);
-  if (authorization?.toLowerCase().startsWith("bearer ")) headers.set("authorization", authorization);
+  if (authorization?.toLowerCase().startsWith("bearer ") || (path === "oidc/token" && authorization?.toLowerCase().startsWith("basic "))) {
+    headers.set("authorization", authorization);
+  }
   if (cookie) headers.set("cookie", cookie);
 
   let upstream: Response;
   try {
-    upstream = await fetch(`${base}/v1/auth/${path}`, {
+    upstream = await fetch(`${base}/v1/auth/${path}${request.nextUrl.search}`, {
       method: request.method,
       headers,
       body: request.method === "GET" ? undefined : await request.arrayBuffer(),
@@ -59,6 +66,8 @@ async function proxy(request: NextRequest, path: string): Promise<Response> {
   });
   const upstreamContentType = upstream.headers.get("content-type");
   if (upstreamContentType) responseHeaders.set("content-type", upstreamContentType);
+  const location = upstream.headers.get("location");
+  if (location) responseHeaders.set("location", location);
   for (const cookieValue of upstream.headers.getSetCookie()) responseHeaders.append("set-cookie", cookieValue);
   return new Response(upstream.body, { status: upstream.status, headers: responseHeaders });
 }

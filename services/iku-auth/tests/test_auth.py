@@ -1,12 +1,17 @@
 import os
 import base64
 import json
+import hashlib
 import sys
 import tempfile
 import unittest
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 from unittest.mock import patch
+
+import jwt
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -30,10 +35,17 @@ class AuthServiceTests(unittest.TestCase):
         self.bootstrap_file.write_text(self.bootstrap_token, encoding="utf-8")
         self.totp_key_file = root / "totp.key"
         self.totp_key_file.write_text(main.Fernet.generate_key().decode("ascii"), encoding="ascii")
+        self.oidc_secret_file = root / "oidc-client-secret"
+        self.oidc_secret_file.write_text("nextcloud-oidc-test-secret-0123456789abcdef", encoding="ascii")
         self.env = patch.dict(os.environ, {
             "IKU_AUTH_BOOTSTRAP_TOKEN_FILE": str(self.bootstrap_file),
             "IKU_AUTH_TOTP_KEY_FILE": str(self.totp_key_file),
             "IKU_AUTH_ALLOWED_ORIGINS": "https://portal.test",
+            "IKU_OIDC_ISSUER": "https://portal.test/api/auth/oidc",
+            "IKU_OIDC_CLIENT_ID": "nextcloud",
+            "IKU_OIDC_CLIENT_SECRET_FILE": str(self.oidc_secret_file),
+            "IKU_OIDC_REDIRECT_URI": "https://nextcloud.test/apps/user_oidc/code",
+            "IKU_OIDC_LOGIN_URL": "https://portal.test/login",
         })
         self.env.start()
         main.init_db()
@@ -742,6 +754,162 @@ class AuthServiceTests(unittest.TestCase):
         })
         self.assertEqual(response.status_code, 422)
         self.assertNotIn(password, response.text)
+
+    def oidc_params(self, verifier: str | None = None) -> tuple[dict[str, str], str]:
+        verifier = verifier or main._b64url(os.urandom(32))
+        challenge = main._b64url(hashlib.sha256(verifier.encode("ascii")).digest())
+        return ({
+            "client_id": "nextcloud",
+            "redirect_uri": "https://nextcloud.test/apps/user_oidc/code",
+            "response_type": "code",
+            "scope": "openid profile email",
+            "state": "state-value-with-enough-entropy",
+            "nonce": "nonce-value-with-enough-entropy",
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+        }, verifier)
+
+    def test_oidc_discovery_and_jwks_are_stable_and_configured(self) -> None:
+        discovery = self.client.get("/v1/auth/oidc/.well-known/openid-configuration")
+        self.assertEqual(discovery.status_code, 200)
+        self.assertEqual(discovery.json()["issuer"], "https://portal.test/api/auth/oidc")
+        self.assertEqual(discovery.json()["authorization_endpoint"], "https://portal.test/api/auth/oidc/authorize")
+        self.assertEqual(discovery.json()["token_endpoint_auth_methods_supported"], ["client_secret_basic", "client_secret_post"])
+        first = self.client.get("/v1/auth/oidc/jwks").json()
+        second = self.client.get("/v1/auth/oidc/jwks").json()
+        self.assertEqual(first, second)
+        self.assertEqual(first["keys"][0]["alg"], "RS256")
+
+    def test_oidc_authorization_requires_login_and_rejects_unregistered_redirect(self) -> None:
+        params, _ = self.oidc_params()
+        unauthenticated = self.client.get("/v1/auth/oidc/authorize", params=params, follow_redirects=False)
+        self.assertEqual(unauthenticated.status_code, 302)
+        self.assertEqual(urlparse(unauthenticated.headers["location"]).path, "/login")
+        self.assertIn("return_to=%2Fapi%2Fauth%2Foidc%2Fauthorize", unauthenticated.headers["location"])
+
+        params["redirect_uri"] = "https://attacker.test/callback"
+        rejected = self.client.get("/v1/auth/oidc/authorize", params=params, follow_redirects=False)
+        self.assertEqual(rejected.status_code, 400)
+        self.assertNotIn("attacker.test", rejected.headers.get("location", ""))
+
+    def test_oidc_rejects_unsafe_issuer_and_login_urls(self) -> None:
+        with patch.dict(os.environ, {"IKU_OIDC_ISSUER": "https://user@portal.test/api/auth/oidc"}):
+            unsafe_issuer = self.client.get("/v1/auth/oidc/.well-known/openid-configuration")
+        self.assertEqual(unsafe_issuer.status_code, 503)
+        with patch.dict(os.environ, {"IKU_OIDC_LOGIN_URL": "https://attacker.test/login"}):
+            unsafe_login = self.client.get("/v1/auth/oidc/.well-known/openid-configuration")
+        self.assertEqual(unsafe_login.status_code, 503)
+
+    def test_oidc_prompt_login_forces_portal_login_without_redirect_loop(self) -> None:
+        self.admin_login()
+        params, _ = self.oidc_params()
+        params["prompt"] = "login"
+        response = self.client.get("/v1/auth/oidc/authorize", params=params, follow_redirects=False)
+        self.assertEqual(response.status_code, 302)
+        location = urllib.parse.urlsplit(response.headers["location"])
+        self.assertEqual(location.path, "/login")
+        return_to = parse_qs(location.query)["return_to"][0]
+        self.assertNotIn("prompt=login", return_to)
+        self.assertIn("state=state-value-with-enough-entropy", return_to)
+
+    def test_oidc_authorization_code_pkce_token_and_userinfo_flow(self) -> None:
+        self.admin_login()
+        params, verifier = self.oidc_params()
+        authorization = self.client.get("/v1/auth/oidc/authorize", params=params, follow_redirects=False)
+        self.assertEqual(authorization.status_code, 302)
+        callback = urlparse(authorization.headers["location"])
+        self.assertEqual(callback.scheme + "://" + callback.netloc + callback.path, params["redirect_uri"])
+        callback_params = parse_qs(callback.query)
+        self.assertEqual(callback_params["state"], [params["state"]])
+        code = callback_params["code"][0]
+
+        basic = base64.b64encode(b"nextcloud:nextcloud-oidc-test-secret-0123456789abcdef").decode("ascii")
+        token_response = self.client.post(
+            "/v1/auth/oidc/token",
+            headers={"Authorization": f"Basic {basic}"},
+            data={
+                "grant_type": "authorization_code", "code": code,
+                "redirect_uri": params["redirect_uri"], "code_verifier": verifier,
+            },
+        )
+        self.assertEqual(token_response.status_code, 200, token_response.text)
+        self.assertEqual(token_response.headers["cache-control"], "no-store")
+        tokens = token_response.json()
+        self.assertEqual(tokens["token_type"], "Bearer")
+        claims = jwt.decode(
+            tokens["id_token"], main.oidc_signing_key().public_key(),
+            algorithms=["RS256"], audience="nextcloud", issuer="https://portal.test/api/auth/oidc",
+            options={"verify_iat": False},
+        )
+        db = main.connect()
+        try:
+            expected_subject = db.execute("SELECT id FROM users WHERE email='admin@example.test'").fetchone()["id"]
+        finally:
+            db.close()
+        self.assertEqual(claims["sub"], expected_subject)
+        self.assertEqual(claims["nonce"], params["nonce"])
+        self.assertEqual(claims["email"], "admin@example.test")
+        self.assertFalse(claims["email_verified"])
+
+        userinfo = self.client.get("/v1/auth/oidc/userinfo", headers={"Authorization": f"Bearer {tokens['access_token']}"})
+        self.assertEqual(userinfo.status_code, 200)
+        self.assertEqual(userinfo.json()["sub"], claims["sub"])
+        self.assertEqual(userinfo.json()["preferred_username"], "admin@example.test")
+        self.assertEqual(userinfo.headers["cache-control"], "no-store")
+
+        replay = self.client.post(
+            "/v1/auth/oidc/token",
+            headers={"Authorization": f"Basic {basic}"},
+            data={
+                "grant_type": "authorization_code", "code": code,
+                "redirect_uri": params["redirect_uri"], "code_verifier": verifier,
+            },
+        )
+        self.assertEqual(replay.status_code, 400)
+        self.assertEqual(replay.json()["error"], "invalid_grant")
+
+    def test_oidc_rejects_bad_pkce_and_bad_client_secret(self) -> None:
+        self.admin_login()
+        params, _ = self.oidc_params()
+        authorization = self.client.get("/v1/auth/oidc/authorize", params=params, follow_redirects=False)
+        code = parse_qs(urlparse(authorization.headers["location"]).query)["code"][0]
+        basic = base64.b64encode(b"nextcloud:wrong-client-secret-0123456789abcdef").decode("ascii")
+        failed_client = self.client.post(
+            "/v1/auth/oidc/token", headers={"Authorization": f"Basic {basic}"},
+            data={
+                "grant_type": "authorization_code", "code": code,
+                "redirect_uri": params["redirect_uri"], "code_verifier": "A" * 43,
+            },
+        )
+        self.assertEqual(failed_client.status_code, 401)
+        self.assertEqual(failed_client.json()["error"], "invalid_client")
+
+        basic = base64.b64encode(b"nextcloud:nextcloud-oidc-test-secret-0123456789abcdef").decode("ascii")
+        failed_pkce = self.client.post(
+            "/v1/auth/oidc/token", headers={"Authorization": f"Basic {basic}"},
+            data={
+                "grant_type": "authorization_code", "code": code,
+                "redirect_uri": params["redirect_uri"], "code_verifier": "A" * 43,
+            },
+        )
+        self.assertEqual(failed_pkce.status_code, 400)
+        self.assertEqual(failed_pkce.json()["error"], "invalid_grant")
+
+    def test_oidc_token_rejects_multiple_client_auth_methods(self) -> None:
+        self.admin_login()
+        params, verifier = self.oidc_params()
+        authorization = self.client.get("/v1/auth/oidc/authorize", params=params, follow_redirects=False)
+        code = parse_qs(urlparse(authorization.headers["location"]).query)["code"][0]
+        basic = base64.b64encode(b"nextcloud:nextcloud-oidc-test-secret-0123456789abcdef").decode("ascii")
+        response = self.client.post(
+            "/v1/auth/oidc/token", headers={"Authorization": f"Basic {basic}"}, data={
+                "grant_type": "authorization_code", "code": code,
+                "redirect_uri": params["redirect_uri"], "code_verifier": verifier,
+                "client_id": "nextcloud", "client_secret": "nextcloud-oidc-test-secret-0123456789abcdef",
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"], "invalid_request")
 
 
 if __name__ == "__main__":

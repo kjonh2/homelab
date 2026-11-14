@@ -18,7 +18,7 @@ async function postAuth(path: string, body: Record<string, unknown>): Promise<{ 
   return { response, payload };
 }
 
-export function LoginForm() {
+export function LoginForm({ continueTo = "/" }: { continueTo?: string }) {
   const router = useRouter();
   const [mode, setMode] = useState<"login" | "bootstrap">("login");
   const [email, setEmail] = useState("");
@@ -31,6 +31,15 @@ export function LoginForm() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+
+  function continueAfterLogin() {
+    if (continueTo !== "/") {
+      window.location.replace(continueTo);
+      return;
+    }
+    router.replace("/");
+    router.refresh();
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -55,8 +64,7 @@ export function LoginForm() {
           setPendingFirebaseToken("");
           setTotpCode("");
           setMfaRequired(false);
-          router.replace("/");
-          router.refresh();
+          continueAfterLogin();
           return;
         }
 
@@ -79,8 +87,7 @@ export function LoginForm() {
         }
         setPassword("");
         setTotpCode("");
-        router.replace("/");
-        router.refresh();
+        continueAfterLogin();
         return;
       }
 
@@ -170,8 +177,7 @@ export function LoginForm() {
             : "Não foi possível iniciar sessão com Google. Tenta novamente.");
         return;
       }
-      router.replace("/");
-      router.refresh();
+      continueAfterLogin();
     } catch {
       setError("Não foi possível contactar o serviço Google ou o serviço de autenticação.");
     } finally {

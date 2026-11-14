@@ -10,6 +10,7 @@ import secrets
 import sqlite3
 import threading
 import time
+import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -20,12 +21,13 @@ from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography import x509
-from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, RedirectResponse
+import jwt
 
 DB_PATH = Path(os.getenv("IKU_AUTH_DB_PATH", "/var/lib/iku-auth/auth.sqlite3"))
 SESSION_COOKIE = "iku_session"
@@ -46,6 +48,9 @@ FIREBASE_CERTS_LOCK = threading.Lock()
 FIREBASE_CERTS: dict[str, x509.Certificate] = {}
 FIREBASE_CERTS_EXPIRES_AT = 0
 FIREBASE_LAST_FORCED_REFRESH_AT = 0
+OIDC_SIGNING_LOCK = threading.Lock()
+OIDC_SCOPES = {"openid", "profile", "email"}
+OIDC_ACCESS_TTL = 300
 app = FastAPI(title="Iku Auth", docs_url=None, redoc_url=None, openapi_url=None)
 
 
@@ -278,6 +283,29 @@ def init_db() -> None:
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS oidc_authorization_codes (
+                code_hash TEXT PRIMARY KEY,
+                client_id TEXT NOT NULL,
+                user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                redirect_uri TEXT NOT NULL,
+                code_challenge TEXT NOT NULL,
+                nonce TEXT,
+                scope TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL,
+                consumed_at INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS oidc_codes_expiry_idx ON oidc_authorization_codes(expires_at, consumed_at);
+            CREATE TABLE IF NOT EXISTS oidc_access_tokens (
+                token_hash TEXT PRIMARY KEY,
+                client_id TEXT NOT NULL,
+                user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                scope TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL,
+                revoked_at INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS oidc_access_expiry_idx ON oidc_access_tokens(expires_at, revoked_at);
             INSERT OR IGNORE INTO roles(name) VALUES ('admin'), ('server'), ('user'), ('api');
             PRAGMA user_version=1;
             """
@@ -666,6 +694,374 @@ def check_totp_or_recovery(db: sqlite3.Connection, user_id: str, code: str) -> b
         db.execute("UPDATE recovery_codes SET used_at=? WHERE id=? AND used_at IS NULL", (utc_now(), recovery["id"]))
         return True
     return False
+
+
+def oidc_settings() -> dict[str, str]:
+    issuer = os.getenv("IKU_OIDC_ISSUER", "").rstrip("/")
+    client_id = os.getenv("IKU_OIDC_CLIENT_ID", "")
+    redirect_uri = os.getenv("IKU_OIDC_REDIRECT_URI", "")
+    login_url = os.getenv("IKU_OIDC_LOGIN_URL", "")
+    secret_file = os.getenv("IKU_OIDC_CLIENT_SECRET_FILE", "")
+    try:
+        issuer_parts = urllib.parse.urlsplit(issuer)
+        login_parts = urllib.parse.urlsplit(login_url)
+        redirect_parts = urllib.parse.urlsplit(redirect_uri)
+        issuer_port = issuer_parts.port
+        login_port = login_parts.port
+        redirect_port = redirect_parts.port
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail="oidc_not_configured") from exc
+    if (
+        issuer_parts.scheme != "https" or not issuer_parts.hostname or issuer_parts.username or issuer_parts.password
+        or not issuer_parts.path.startswith("/") or issuer_parts.query or issuer_parts.fragment
+        or issuer_port is not None and not 1 <= issuer_port <= 65535
+        or not client_id or redirect_parts.scheme != "https" or not redirect_parts.hostname
+        or redirect_parts.username or redirect_parts.password or not redirect_parts.path.startswith("/")
+        or redirect_parts.query or redirect_parts.fragment
+        or redirect_port is not None and not 1 <= redirect_port <= 65535
+        or login_parts.scheme != "https" or not login_parts.hostname or login_parts.username or login_parts.password
+        or login_parts.hostname.casefold() != issuer_parts.hostname.casefold() or login_port != issuer_port
+        or not login_parts.path.startswith("/")
+        or login_parts.query or login_parts.fragment
+        or not secret_file
+    ):
+        raise HTTPException(status_code=503, detail="oidc_not_configured")
+    return {
+        "issuer": issuer,
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "login_url": login_url,
+        "secret_file": secret_file,
+    }
+
+
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+def oidc_signing_key() -> rsa.RSAPrivateKey:
+    path = DB_PATH.parent / "oidc-signing-key.pem"
+    with OIDC_SIGNING_LOCK:
+        try:
+            key_data = path.read_bytes()
+        except FileNotFoundError:
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            key = rsa.generate_private_key(public_exponent=65537, key_size=3072)
+            key_data = key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            )
+            temporary = path.with_suffix(".pem.tmp")
+            temporary.write_bytes(key_data)
+            try:
+                os.chmod(temporary, 0o600)
+            except OSError:
+                pass
+            temporary.replace(path)
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                pass
+            return key
+        except OSError as exc:
+            raise HTTPException(status_code=503, detail="oidc_signing_key_unavailable") from exc
+        try:
+            key = serialization.load_pem_private_key(key_data, password=None)
+            if not isinstance(key, rsa.RSAPrivateKey) or key.key_size < 2048:
+                raise ValueError("OIDC signing key must be RSA with at least 2048 bits")
+            return key
+        except (TypeError, ValueError, OSError) as exc:
+            raise HTTPException(status_code=503, detail="oidc_signing_key_unavailable") from exc
+
+
+def oidc_key_id(key: rsa.RSAPrivateKey) -> str:
+    public_der = key.public_key().public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    return _b64url(hashlib.sha256(public_der).digest()[:16])
+
+
+def oidc_signed_token(claims: dict[str, Any], key: rsa.RSAPrivateKey, kid: str) -> str:
+    return jwt.encode(claims, key, algorithm="RS256", headers={"kid": kid, "typ": "JWT"})
+
+
+def oidc_client_auth(request: Request, fields: dict[str, str], settings: dict[str, str]) -> bool:
+    client_id = ""
+    client_secret = ""
+    authorization = request.headers.get("authorization", "")
+    scheme, _, value = authorization.partition(" ")
+    if scheme.lower() == "basic" and value:
+        try:
+            decoded = base64.b64decode(value, validate=True).decode("utf-8")
+            client_id, client_secret = decoded.split(":", 1)
+        except (ValueError, UnicodeDecodeError):
+            return False
+    elif scheme:
+        return False
+    else:
+        client_id = fields.get("client_id", "")
+        client_secret = fields.get("client_secret", "")
+    if not hmac.compare_digest(client_id, settings["client_id"]):
+        return False
+    try:
+        expected_secret = read_secret("IKU_OIDC_CLIENT_SECRET_FILE")
+    except HTTPException:
+        return False
+    return hmac.compare_digest(client_secret.encode("utf-8"), expected_secret.encode("utf-8"))
+
+
+def oidc_token_error(error: str, status: int = 400) -> JSONResponse:
+    return JSONResponse(
+        {"error": error},
+        status_code=status,
+        headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+    )
+
+
+def oidc_authorization_error(redirect_uri: str, state: str, error: str) -> RedirectResponse:
+    query = {"error": error}
+    if state:
+        query["state"] = state
+    return RedirectResponse(f"{redirect_uri}?{urllib.parse.urlencode(query)}", status_code=302)
+
+
+def _oidc_login_redirect(request: Request, settings: dict[str, str]) -> RedirectResponse:
+    return_to = "/api/auth/oidc/authorize"
+    if request.url.query:
+        query = urllib.parse.parse_qsl(request.url.query, keep_blank_values=True, max_num_fields=64)
+        if request.query_params.get("prompt") == "login":
+            query = [(key, value) for key, value in query if key != "prompt"]
+        return_to += "?" + urllib.parse.urlencode(query)
+    target = settings["login_url"] + "?" + urllib.parse.urlencode({"return_to": return_to})
+    return RedirectResponse(target, status_code=302)
+
+
+@app.get("/v1/auth/oidc/.well-known/openid-configuration")
+def oidc_discovery() -> dict[str, Any]:
+    settings = oidc_settings()
+    base = settings["issuer"]
+    return {
+        "issuer": base,
+        "authorization_endpoint": f"{base}/authorize",
+        "token_endpoint": f"{base}/token",
+        "userinfo_endpoint": f"{base}/userinfo",
+        "jwks_uri": f"{base}/jwks",
+        "response_types_supported": ["code"],
+        "subject_types_supported": ["public"],
+        "id_token_signing_alg_values_supported": ["RS256"],
+        "scopes_supported": sorted(OIDC_SCOPES),
+        "claims_supported": ["sub", "email", "email_verified", "name", "preferred_username"],
+        "grant_types_supported": ["authorization_code"],
+        "token_endpoint_auth_methods_supported": ["client_secret_basic", "client_secret_post"],
+        "code_challenge_methods_supported": ["S256"],
+        "userinfo_signing_alg_values_supported": ["none"],
+    }
+
+
+@app.get("/v1/auth/oidc/jwks")
+def oidc_jwks() -> dict[str, Any]:
+    key = oidc_signing_key()
+    numbers = key.public_key().public_numbers()
+    modulus = numbers.n.to_bytes((numbers.n.bit_length() + 7) // 8, "big")
+    exponent = numbers.e.to_bytes((numbers.e.bit_length() + 7) // 8, "big")
+    return {
+        "keys": [{
+            "kty": "RSA", "use": "sig", "alg": "RS256", "kid": oidc_key_id(key),
+            "n": _b64url(modulus), "e": _b64url(exponent),
+        }]
+    }
+
+
+@app.get("/v1/auth/oidc/authorize")
+def oidc_authorize(request: Request) -> Response:
+    settings = oidc_settings()
+    if len(request.url.query) > 8192:
+        return JSONResponse({"error": "invalid_request"}, status_code=400)
+    for name in ("client_id", "redirect_uri", "response_type", "scope", "state", "nonce", "code_challenge", "code_challenge_method"):
+        if len(request.query_params.getlist(name)) > 1:
+            return JSONResponse({"error": "invalid_request"}, status_code=400)
+    client_id = request.query_params.get("client_id", "")
+    redirect_uri = request.query_params.get("redirect_uri", "")
+    state = request.query_params.get("state", "")
+    scope_items = request.query_params.get("scope", "").split()
+    challenge = request.query_params.get("code_challenge", "")
+    nonce = request.query_params.get("nonce", "")
+    valid_redirect = hmac.compare_digest(client_id, settings["client_id"]) and hmac.compare_digest(redirect_uri, settings["redirect_uri"])
+    if not valid_redirect:
+        return JSONResponse({"error": "invalid_request"}, status_code=400)
+    if (
+        request.query_params.get("response_type") != "code"
+        or not state or len(state) > 512
+        or not scope_items or len(scope_items) != len(set(scope_items))
+        or "openid" not in scope_items or any(scope not in OIDC_SCOPES for scope in scope_items)
+        or (nonce and len(nonce) > 512)
+        or request.query_params.get("code_challenge_method") != "S256"
+        or not re.fullmatch(r"[A-Za-z0-9_-]{43,128}", challenge)
+        or request.query_params.get("response_mode", "query") != "query"
+        or request.query_params.get("prompt", "") not in ("", "none", "login")
+    ):
+        return oidc_authorization_error(redirect_uri, state, "invalid_request")
+
+    db = connect()
+    try:
+        session_token = request.cookies.get(SESSION_COOKIE, "")
+        user = None
+        if session_token:
+            user = db.execute(
+                "SELECT u.id,u.email FROM sessions s JOIN users u ON u.id=s.user_id "
+                "WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>? AND u.disabled=0",
+                (digest_token(session_token), utc_now()),
+            ).fetchone()
+        if not user:
+            if request.query_params.get("prompt") == "none":
+                return oidc_authorization_error(redirect_uri, state, "login_required")
+            return _oidc_login_redirect(request, settings)
+        if request.query_params.get("prompt") == "login":
+            return _oidc_login_redirect(request, settings)
+
+        now = utc_now()
+        code = secrets.token_urlsafe(32)
+        db.execute("BEGIN IMMEDIATE")
+        db.execute("DELETE FROM oidc_authorization_codes WHERE expires_at<=? OR consumed_at IS NOT NULL", (now,))
+        db.execute(
+            "INSERT INTO oidc_authorization_codes(code_hash,client_id,user_id,redirect_uri,code_challenge,nonce,scope,created_at,expires_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            (digest_token(code), settings["client_id"], user["id"], redirect_uri, challenge, nonce or None, " ".join(scope_items), now, now + 180),
+        )
+        audit(db, user["id"], "auth.oidc.authorize", "success", "oidc", request_ip(request))
+        db.commit()
+        return RedirectResponse(
+            redirect_uri + "?" + urllib.parse.urlencode({"code": code, "state": state}),
+            status_code=302,
+        )
+    except Exception:
+        if db.in_transaction:
+            db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+@app.post("/v1/auth/oidc/token")
+async def oidc_token(request: Request) -> Response:
+    settings = oidc_settings()
+    if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/x-www-form-urlencoded":
+        return oidc_token_error("invalid_request")
+    try:
+        raw = bytearray()
+        async for chunk in request.stream():
+            raw.extend(chunk)
+            if len(raw) > 16 * 1024:
+                return oidc_token_error("invalid_request")
+        parsed = urllib.parse.parse_qs(raw.decode("ascii"), keep_blank_values=True, strict_parsing=True, max_num_fields=16)
+        if any(len(values) != 1 for values in parsed.values()):
+            return oidc_token_error("invalid_request")
+        fields = {name: values[0] for name, values in parsed.items()}
+    except (UnicodeDecodeError, ValueError):
+        return oidc_token_error("invalid_request")
+    if not oidc_client_auth(request, fields, settings):
+        return oidc_token_error("invalid_client", 401)
+    auth_scheme = request.headers.get("authorization", "").partition(" ")[0].lower()
+    if auth_scheme == "basic" and ("client_id" in fields or "client_secret" in fields):
+        return oidc_token_error("invalid_request")
+    if fields.get("grant_type") != "authorization_code":
+        return oidc_token_error("unsupported_grant_type")
+    code = fields.get("code", "")
+    redirect_uri = fields.get("redirect_uri", "")
+    verifier = fields.get("code_verifier", "")
+    if not code or len(code) > 512 or not verifier or not re.fullmatch(r"[A-Za-z0-9._~-]{43,128}", verifier):
+        return oidc_token_error("invalid_grant")
+    key = oidc_signing_key()
+    kid = oidc_key_id(key)
+    db = connect()
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute(
+            "SELECT c.*,u.email FROM oidc_authorization_codes c JOIN users u ON u.id=c.user_id "
+            "WHERE c.code_hash=? AND u.disabled=0",
+            (digest_token(code),),
+        ).fetchone()
+        if (
+            not row or row["client_id"] != settings["client_id"] or row["redirect_uri"] != redirect_uri
+            or redirect_uri != settings["redirect_uri"] or row["consumed_at"] is not None
+            or row["expires_at"] <= utc_now()
+        ):
+            db.rollback()
+            return oidc_token_error("invalid_grant")
+        challenge = _b64url(hashlib.sha256(verifier.encode("ascii")).digest())
+        if not hmac.compare_digest(challenge, row["code_challenge"]):
+            db.rollback()
+            return oidc_token_error("invalid_grant")
+
+        now = utc_now()
+        db.execute("DELETE FROM oidc_access_tokens WHERE expires_at<=? OR revoked_at IS NOT NULL", (now,))
+        db.execute(
+            "UPDATE oidc_authorization_codes SET consumed_at=? WHERE code_hash=? AND consumed_at IS NULL",
+            (now, row["code_hash"]),
+        )
+        access_token = secrets.token_urlsafe(32)
+        expires_at = now + OIDC_ACCESS_TTL
+        db.execute(
+            "INSERT INTO oidc_access_tokens(token_hash,client_id,user_id,scope,created_at,expires_at) VALUES(?,?,?,?,?,?)",
+            (digest_token(access_token), settings["client_id"], row["user_id"], row["scope"], now, expires_at),
+        )
+        claims: dict[str, Any] = {
+            "iss": settings["issuer"], "sub": row["user_id"], "aud": settings["client_id"],
+            "iat": now, "exp": expires_at, "email": row["email"], "email_verified": False,
+        }
+        if "profile" in row["scope"].split():
+            claims.update({"name": row["email"], "preferred_username": row["email"]})
+        if row["nonce"]:
+            claims["nonce"] = row["nonce"]
+        id_token = oidc_signed_token(claims, key, kid)
+        db.commit()
+        return JSONResponse(
+            {
+                "access_token": access_token, "token_type": "Bearer", "expires_in": OIDC_ACCESS_TTL,
+                "id_token": id_token, "scope": row["scope"],
+            },
+            headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+        )
+    except Exception:
+        if db.in_transaction:
+            db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+@app.get("/v1/auth/oidc/userinfo")
+def oidc_userinfo(request: Request) -> Response:
+    authorization = request.headers.get("authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token or len(token) > 512:
+        return JSONResponse(
+            {"error": "invalid_token"}, status_code=401,
+            headers={"WWW-Authenticate": "Bearer", "Cache-Control": "no-store", "Pragma": "no-cache"},
+        )
+    db = connect()
+    try:
+        row = db.execute(
+            "SELECT a.scope,u.id,u.email FROM oidc_access_tokens a JOIN users u ON u.id=a.user_id "
+            "WHERE a.token_hash=? AND a.revoked_at IS NULL AND a.expires_at>? AND u.disabled=0",
+            (digest_token(token), utc_now()),
+        ).fetchone()
+        if not row:
+            return JSONResponse(
+                {"error": "invalid_token"}, status_code=401,
+                headers={"WWW-Authenticate": "Bearer", "Cache-Control": "no-store", "Pragma": "no-cache"},
+            )
+        claims: dict[str, Any] = {"sub": row["id"]}
+        scopes = set(row["scope"].split())
+        if "email" in scopes:
+            claims.update({"email": row["email"], "email_verified": False})
+        if "profile" in scopes:
+            claims.update({"name": row["email"], "preferred_username": row["email"]})
+        return JSONResponse(claims, headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
+    finally:
+        db.close()
 
 
 @app.get("/healthz")
