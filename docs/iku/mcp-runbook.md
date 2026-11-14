@@ -1,6 +1,6 @@
 # Iku / Drisa MCP Runbook
 
-Última verificação: 2026-11-14.
+Última verificação: 2026-11-15.
 
 ## Modelo de instalação
 
@@ -35,6 +35,8 @@ O perfil local continua disponível para inspeção, mas o handshake da gateway 
 As skills Docker MCP e gestão de contexto estão instaladas em `%LOCALAPPDATA%\hermes\skills\` e `%USERPROFILE%\.hermes\skills\`; os ficheiros instalados têm o mesmo SHA-256 que as versões versionadas em `deploy/windows/skills/`. O `mcp_servers.drisa-docker` está ativo em `%LOCALAPPDATA%\hermes\config.yaml`, lança `docker mcp gateway run --profile drisa`, e limita a sessão à allowlist acima. O handshake real continua por validar.
 
 Nova verificação em 2026-11-14: Docker MCP CLI `v0.44.3`, Docker client/server `29.9.3`, perfil `drisa` com três servidores e 36 ferramentas permitidas. `McpManagementService` está `Running` como `LocalSystem`; reiniciá-lo não corrigiu o timeout de `docker mcp secret ls`, que continua a devolver `deadline_exceeded` em `ResolverService/GetSecrets`. Os logs Hermes mostram a mesma falha ao iniciar `drisa-docker`. Não exportes nem copies os segredos para contornar o resolver. Um reinício completo do Docker Desktop continua por aprovar.
+
+Revalidação em 2026-11-15: Docker Desktop `4.99.0.245822` e Docker MCP CLI `v0.44.3`; `docker desktop status` reporta `running`. `docker mcp secret ls` continua a falhar com timeout em `ResolverService/GetSecrets`. `docker ps` não devolveu resposta e foi interrompido após a espera; `docker desktop diagnose` também não produziu relatório após mais de dois minutos e foi interrompido. A recolha não foi carregada nem partilhada. Não há evidência de que a versão atual corrija o resolver; o próximo diagnóstico que pode alterar o estado é reiniciar o Docker Desktop, ainda por aprovar.
 
 ## Segurança
 
