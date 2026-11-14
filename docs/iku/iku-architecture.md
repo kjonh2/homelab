@@ -17,6 +17,12 @@ The three machines have different jobs. They are not identical copies of the Iku
 - The public React landing page is served by unprivileged Nginx. `app.iknowu.org` is proxied by that Nginx instance to the Iku portal service, and `cloud.iknowu.org` is proxied to Nextcloud. Cloudflare Tunnel is the public ingress; application ports are not opened on the VPS firewall.
 - PostgreSQL stores encrypted Drisa messages and summaries on a VPS-local PVC. Restic sends encrypted backups to the homelab receiver; the restore drill verified the database backup path. This is recovery, not live database replication.
 
+## Network isolation
+
+The public website and portal are published through Cloudflare Tunnel. Tailscale Serve listeners on the VPS are tailnet-only; every Kubernetes Service is `ClusterIP`, and there are no Kubernetes Ingress resources. The public Nginx proxy sends `app.iknowu.org` to the portal and `cloud.iknowu.org` to Nextcloud.
+
+On 2026-11-14, ingress allow-lists were applied to the portal, Iku Auth, Nextcloud, n8n, and LFM3 using `deploy/k3s/service-ingress-network-policies.yaml`; separate policies still protect Drisa audio, Drisa PostgreSQL, and the backup namespace. Egress remains unrestricted by these new policies. Traffic from a pod's node remains allowed by Kubernetes, preserving node-local Tailscale Serve forwards and kubelet probes. After applying, the public site, portal login/auth endpoint, and Nextcloud login/status returned their expected HTTP responses; n8n and LFM3 returned HTTP 200 over their tailnet-only Serve ports, and all selected pods remained Ready. Add any new in-cluster callers to the relevant policy before deploying them.
+
 ## Availability boundaries
 
 K3s currently has two Ready nodes, but only the VPS runs the control plane. The public site and its Cloudflare connector each have two replicas, with required pod anti-affinity placing one on each node. This gives the static site an independent connector and origin on the homelab. The portal, Auth, PostgreSQL, Nextcloud, n8n, and LFM3 are still VPS workloads; their local-path storage is not replicated. They do not automatically fail over if the VPS is unavailable. The homelab can receive scheduled backups, but restoring services there remains a manual recovery operation.
