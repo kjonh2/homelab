@@ -164,6 +164,26 @@ The Android Services screen includes a push-to-talk entry for the Windows laptop
 
 Install the APK built from `android/` with `gradlew.bat :app:assembleModernDebug`; it is a debug build, not signed for Play Store release. Sign in with the existing Iku account before opening Services; `MainActivity` redirects unauthenticated sessions to Firebase `LoginActivity`. In Services, open **Falar com a Drisa**, keep the endpoint and device ID defaults, enter the gateway token from the laptop once, and connect. The **Modelos da Drisa** panel shows loaded models by host and category and lets the user load an available model on the laptop or VPS.
 
+### Install and validate over wireless ADB
+
+For Android 11 or later, wireless debugging avoids USB-driver issues. Put the laptop and phone on the same Wi-Fi network, then on the phone open **Developer options → Wireless debugging → Pair device with pairing code**. In a PowerShell opened at the repository root, pair with the IP address and pairing port shown on the phone:
+
+```powershell
+adb pair <phone-ip>:<pairing-port>
+# Enter the short-lived code directly at the adb prompt; never paste it into chat.
+```
+
+Return to the main **Wireless debugging** screen and use its connection port (it may differ from the pairing port):
+
+```powershell
+adb connect <phone-ip>:<debug-port>
+adb devices -l
+.\android\gradlew.bat -p android :app:assembleModernDebug
+adb install -r android/app/build/outputs/apk/modern/debug/app-modern-debug.apk
+```
+
+Accept the MIUI install prompt on the phone if it appears. In the Iku app, sign in, connect to Drisa, load a model, and verify a microphone utterance and Kokoro playback. Android's [wireless debugging guide](https://developer.android.com/tools/adb) documents this pairing flow. The pairing code is not needed after the device is paired; do not store it.
+
 ## Laptop Gaming mode
 
 The Drisa mode switch is versioned at [`deploy/windows/drisa_mode.ps1`](../../deploy/windows/drisa_mode.ps1), with gaming environment settings in [`deploy/windows/drisa_remote_config.ps1`](../../deploy/windows/drisa_remote_config.ps1). Copy the mode switch, remote settings, watchdog, and watchdog registration scripts into `%USERPROFILE%\workspace\drisa`; the watchdog checks the gateway and active voice listener every minute while the user is signed in. The launcher dot-sources the runtime copy of the remote configuration. The shared speech sanitizer is [`deploy/windows/drisa_speech_text.py`](../../deploy/windows/drisa_speech_text.py); its tests run with `python -m unittest discover -s deploy/windows -p 'test_*.py'` from the repository root. The Gaming route can be tested without starting services with `powershell -NoProfile -ExecutionPolicy Bypass -File deploy/windows/test_drisa_remote_config.ps1`:
