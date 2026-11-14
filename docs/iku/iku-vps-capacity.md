@@ -25,8 +25,8 @@ Em 2026-11-12, a partir do portátil ligado ao tailnet, o portal redirecionou `/
 ## Segurança observada
 
 - `sshd` tem `PermitRootLogin no`, `PasswordAuthentication no`, `PubkeyAuthentication yes` e `X11Forwarding no`.
-- UFW está ativo: apenas SSH está permitido globalmente, com rate limit; as regras adicionais permitem os CIDRs internos de Pods e Services.
-- K3s escuta em `6443` e `10250` no host, mas não há regras UFW públicas para essas portas. Mantém essa distinção ao rever a exposição de rede.
+- UFW está ativo com entrada negada por defeito. SSH é limitado por taxa; as regras adicionais permitem os CIDRs internos de Pods e Services.
+- Verificado em 2026-11-14: as portas TCP `5432`, `6443`, `8443`–`8445` e `10250` falharam em probes aos endereços públicos IPv4 e IPv6. K3s API `6443`, Flannel UDP `8472` e kubelet `10250` só aceitam o nó homelab em `tailscale0`; PostgreSQL TCP `5432` só aceita o portátil pela interface Tailscale. Os listeners do host em `6443` e `10250` não significam exposição pública.
 - `unattended-upgrades` está ativo; não havia reinício pendente durante a verificação.
 - `fail2ban` está inativo; a proteção de SSH observada é a regra `LIMIT` do UFW combinada com autenticação por chave.
 
