@@ -16,6 +16,7 @@ export default async function SectionPage({ params }: { params: Promise<{ sectio
   const { section: slug } = await params;
   const section = sectionBySlug[slug];
   if (!section) notFound();
+  if (slug === "dashboard") redirect("/");
 
   if (slug === "services") {
     const services = await getServiceStatus();
