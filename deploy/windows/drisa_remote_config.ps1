@@ -10,7 +10,7 @@ function Set-DrisaGamingEnvironment {
     $env:DRISA_LLM_URL = 'https://vps-4e5174e4.tail2931da.ts.net:8445/v1'
     $env:DRISA_LLM_HOST = 'vps'
     # Gaming mode changes where inference runs, not which text model is selected.
-    Remove-Item Env:DRISA_LLM_MODEL -ErrorAction SilentlyContinue
+    # Preserve DRISA_LLM_MODEL loaded from gateway_config.json by the watchdog.
 }
 
 function Get-DrisaGamingModelServerProcesses {
