@@ -28,7 +28,9 @@ O script de inspeção mostra apenas nomes de ferramentas marcadas como leitura.
 
 ## Estado da gateway
 
-O perfil local continua disponível para inspeção, mas o handshake da gateway ainda não foi validado. Em 2026-11-14, `docker mcp secret ls` devolveu `deadline_exceeded` ao chamar `ResolverService/GetSecrets`. `McpManagementService` estava ativo; reiniciá-lo com UAC não resolveu o timeout. `docker mcp gateway run --profile drisa --dry-run --verbose` também ficou à espera do resolvedor. Depois de o Docker Desktop Secret Engine voltar a responder, repete esse dry-run e valida uma nova sessão Hermes/Drisa.
+O perfil local continua disponível para inspeção, mas o handshake da gateway ainda não foi validado. Em 2026-11-14, com Docker MCP CLI `v0.44.3` e `McpManagementService` em execução, `docker pass ls` listou os identificadores locais sem ler valores. Em contraste, `docker mcp secret ls` devolveu `deadline_exceeded` ao chamar `ResolverService/GetSecrets`. Isso confirma que os identificadores existem no armazenamento local; a falha está no caminho do resolver MCP, mas a causa interna ainda não foi identificada. O serviço já foi iniciado com UAC e o timeout persiste. Um `docker mcp gateway run --profile drisa --dry-run --verbose` anterior também ficou à espera do resolver. Não exportes os segredos para ficheiros como tentativa de contorno.
+
+As skills Docker MCP e gestão de contexto estão instaladas em `%LOCALAPPDATA%\hermes\skills\`; os ficheiros instalados têm o mesmo SHA-256 que as versões versionadas em `deploy/windows/skills/`. Depois de o resolver voltar a responder, repete o dry-run e valida uma nova sessão Hermes/Drisa.
 
 ## Segurança
 
