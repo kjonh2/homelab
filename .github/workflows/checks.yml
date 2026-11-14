@@ -38,6 +38,12 @@ jobs:
           deploy/windows/test_drisa_voice_gateway.py
           deploy/windows/test_drisa_speech_text.py
           deploy/windows/test_voice_loop_local.py
+          deploy/windows/test_drisa_memory.py
+          deploy/windows/test_drisa_log_rotation.py
+
+      - name: Test Gaming-mode routing
+        shell: pwsh
+        run: ./deploy/windows/test_drisa_remote_config.ps1
 
   web-builds:
     runs-on: ubuntu-latest
@@ -102,8 +108,3 @@ jobs:
           path: android/app/build/outputs/apk/modern/debug/app-modern-debug.apk
           if-no-files-found: error
           retention-days: 14
-
-
-
-
-
