@@ -39,7 +39,7 @@ O cluster VPS atual é de nó único com armazenamento local. Por isso a base de
 ## Sessões, tokens e proteção
 
 - Sessão web opaca, aleatória e revogável, persistida como hash no banco de dados; cookie `Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/`, com expiração limitada e rotação após autenticação/MFA.
-- Verificar `Origin` nas mutações web e usar token CSRF. Nunca aceitar credenciais ou tokens em query strings.
+- Verificar `Origin` nas mutações web contra uma allowlist estrita com `https://app.iknowu.org` e `https://vps-4e5174e4.tail2931da.ts.net`; o portal público e o endpoint de gestão tailnet usam ambos a mesma API. Rejeitar qualquer outra origem e nunca aceitar credenciais ou tokens em query strings.
 - Android recebe access token de curta duração e refresh token rotativo. Guardar hash do refresh token, família, dispositivo, expiração e revogação; guardar o segredo apenas no Keystore no cliente.
 - Tokens de API têm prefixo identificável, hash no banco, nome de dispositivo, scopes, criação, última utilização, expiração e revogação. Mostrar o valor apenas uma vez.
 - Hash de palavra-passe com Argon2id e parâmetros atualizáveis; comparação de tempo constante para tokens. Limitar tentativas por IP e identificador, sem registar palavras-passe, códigos MFA ou tokens. A ponte Firebase valida assinatura RS256, issuer, audience, timestamps, provider e email verificado, usando certificados Google em cache; não consulta a revogação do refresh token Firebase.
