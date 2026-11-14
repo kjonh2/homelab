@@ -26,7 +26,7 @@ Expect two Ready nodes and two Ready public-site pods on distinct nodes. Check t
 sudo kubectl -n iku logs <homelab-site-pod> -c cloudflared --since=15m
 ```
 
-Public smoke checks from Windows (the laptop may override `iknowu.org` in its hosts file, so force the Cloudflare address):
+Public smoke checks from Windows (the laptop's hosts file currently maps `iknowu.org` to `127.0.0.1`; a normal request resets locally, while forcing Cloudflare succeeds. Do not use the unforced request to diagnose public ingress):
 
 ```powershell
 curl.exe -sS -o NUL -w '%{http_code}' --resolve iknowu.org:443:188.114.96.2 https://iknowu.org/
