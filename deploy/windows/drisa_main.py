@@ -362,6 +362,10 @@ class DrisaAssistant:
             logger.debug(f"Speech segment too short ({len(audio_data)} samples), ignoring")
             return
 
+        if not self.wake_word_detector or not self.wake_word_detector.process_audio(audio_data):
+            logger.debug("Speech segment ignored; the offline wake word was not detected")
+            return
+
         current_time = time.monotonic()
         fingerprint = hashlib.sha256(np.ascontiguousarray(audio_data).tobytes()).digest()
         with self._speech_gate_lock:
