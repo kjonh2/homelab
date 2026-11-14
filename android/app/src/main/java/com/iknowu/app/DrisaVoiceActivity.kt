@@ -299,35 +299,60 @@ class DrisaVoiceActivity : AppCompatActivity() {
     }
 
     private fun startRecording() {
-        if (!authenticated || recording.get()) return
-        val minBuffer = AudioRecord.getMinBufferSize(16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        if (minBuffer <= 0) { setStatus("Este dispositivo não suporta gravação de voz."); return }
-        val audioRecord = AudioRecord(
-            MediaRecorder.AudioSource.VOICE_RECOGNITION,
-            16000,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-            maxOf(minBuffer, 8192)
-        )
-        if (audioRecord.state != AudioRecord.STATE_INITIALIZED) {
-            audioRecord.release()
-            setStatus("Não foi possível iniciar o microfone.")
-            return
-        }
-        pcm.reset()
-        recorder = audioRecord
-        recording.set(true)
-        talkButton.text = "Parar e enviar voz"
-        setStatus("A gravar. Toca novamente quando acabares.")
-        mainHandler.postDelayed(recordingLimit, 120_000)
-        audioRecord.startRecording()
-        recordThread = Thread {
-            val buffer = ByteArray(maxOf(minBuffer, 8192))
-            while (recording.get()) {
-                val count = audioRecord.read(buffer, 0, buffer.size)
-                if (count > 0) synchronized(pcm) { pcm.write(buffer, 0, count) }
+        if (!authenticated) { setStatus("Liga e autentica a Drisa antes de gravar."); return }
+        if (recording.get()) return
+        var pendingRecorder: AudioRecord? = null
+        try {
+            val minBuffer = AudioRecord.getMinBufferSize(16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+            if (minBuffer <= 0) { setStatus("Este dispositivo não suporta gravação de voz (código $minBuffer)."); return }
+            val audioRecord = AudioRecord(
+                MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                16000,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                maxOf(minBuffer, 8192)
+            )
+            pendingRecorder = audioRecord
+            if (audioRecord.state != AudioRecord.STATE_INITIALIZED) {
+                audioRecord.release()
+                setStatus("Não foi possível iniciar o microfone. Verifica a permissão e se outra app o está a usar.")
+                return
             }
-        }.apply { name = "DrisaAudioCapture"; start() }
+            audioRecord.startRecording()
+            if (audioRecord.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                audioRecord.release()
+                setStatus("O Android não iniciou a captura do microfone.")
+                return
+            }
+            pcm.reset()
+            recorder = audioRecord
+            recording.set(true)
+            talkButton.text = "Parar e enviar voz"
+            setStatus("Microfone ativo. Fala agora; toca novamente quando acabares.")
+            mainHandler.postDelayed(recordingLimit, 120_000)
+            recordThread = Thread {
+                val buffer = ByteArray(maxOf(minBuffer, 8192))
+                var readErrorShown = false
+                while (recording.get()) {
+                    val count = audioRecord.read(buffer, 0, buffer.size)
+                    if (count > 0) synchronized(pcm) { pcm.write(buffer, 0, count) }
+                    else if (count < 0 && !readErrorShown) {
+                        readErrorShown = true
+                        runOnUiThread { setStatus("Erro ao ler o microfone (código $count).") }
+                    }
+                }
+            }.apply { name = "DrisaAudioCapture"; start() }
+        } catch (_: SecurityException) {
+            recording.set(false)
+            pendingRecorder?.release()
+            recorder = null
+            setStatus("Permissão do microfone recusada. Ativa Microfone para a app Iku nas definições Android.")
+        } catch (error: Exception) {
+            recording.set(false)
+            pendingRecorder?.release()
+            recorder = null
+            setStatus("Falha ao iniciar a captura: ${error.javaClass.simpleName}.")
+        }
     }
 
     private fun stopRecording(send: Boolean = true) {
@@ -339,13 +364,17 @@ class DrisaVoiceActivity : AppCompatActivity() {
         recorder = null
         recordThread = null
         val bytes = synchronized(pcm) { pcm.toByteArray() }
-        if (send && bytes.isNotEmpty() && authenticated) {
+        if (send && authenticated && bytes.size < 16000) {
+            setStatus("Não foi captado áudio suficiente. Mantém a gravação enquanto falas e tenta novamente.")
+        } else if (send && bytes.isNotEmpty() && authenticated) {
             val wav = makeWav(bytes, 16000, 1, 16)
             val message = JSONObject()
                 .put("type", "audio")
                 .put("audio_b64", Base64.encodeToString(wav, Base64.NO_WRAP))
             if (socket?.send(message.toString()) == true) awaitAudioResponse("Áudio enviado. A Drisa está a responder…")
             else setStatus("Não foi possível enviar o áudio.")
+        } else if (send && bytes.isEmpty()) {
+            setStatus("A gravação ficou vazia. Verifica a permissão e o microfone do telemóvel.")
         }
         updateButtons()
     }

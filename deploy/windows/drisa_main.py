@@ -370,13 +370,13 @@ class DrisaAssistant:
         fingerprint = hashlib.sha256(np.ascontiguousarray(audio_data).tobytes()).digest()
         with self._speech_gate_lock:
             if self.is_processing_speech:
-                logger.debug("Already processing speech, ignoring")
+                logger.info("Wake word accepted but another speech segment is still processing")
                 return
             if (
                 fingerprint == self._last_speech_fingerprint
                 and current_time - self._last_speech_fingerprint_at < 30.0
             ):
-                logger.debug("Duplicate audio segment ignored")
+                logger.info("Wake word accepted but identical audio segment was already handled")
                 return
             self._last_speech_fingerprint = fingerprint
             self._last_speech_fingerprint_at = current_time
