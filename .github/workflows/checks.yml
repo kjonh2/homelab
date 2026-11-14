@@ -93,7 +93,8 @@ jobs:
 
       - name: Build modern Android APK
         working-directory: android
-        run: ./gradlew --no-daemon :app:assembleModernDebug
+        run: bash gradlew --no-daemon :app:assembleModernDebug
+
 
 
 
