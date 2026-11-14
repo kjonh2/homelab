@@ -1,7 +1,10 @@
 package com.iknowu.app
 
 import android.app.Activity
+import android.content.Context
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.text.InputType
 import android.widget.EditText
 import android.widget.Toast
@@ -25,6 +28,7 @@ internal object IkuAuthClient {
     private val http = OkHttpClient.Builder()
         .callTimeout(12, TimeUnit.SECONDS)
         .build()
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     fun connect(activity: Activity, user: FirebaseUser, completed: (Boolean, String) -> Unit) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
@@ -87,6 +91,29 @@ internal object IkuAuthClient {
                 }
             }
         })
+    }
+
+    /** Rotates a saved Android refresh token without requiring a new Firebase/MFA login. */
+    fun refreshSavedSession(context: Context, completed: (Boolean, String) -> Unit) {
+        val saved = IkuAuthSessionStore.read(context)
+        val refreshToken = saved?.optString("refresh_token").orEmpty()
+        if (refreshToken.isBlank()) {
+            completed(false, "A sessão Iku expirou. Liga-a novamente em Perfil.")
+            return
+        }
+        refresh(context, refreshToken) { result ->
+            when (result.code) {
+                200 -> {
+                    if (IkuAuthSessionStore.save(context, result.body)) completed(true, "Sessão Iku renovada.")
+                    else completed(false, "Não consegui guardar a sessão Iku cifrada neste telemóvel.")
+                }
+                401 -> {
+                    IkuAuthSessionStore.clear(context)
+                    completed(false, "A sessão Iku expirou. Liga-a novamente em Perfil.")
+                }
+                else -> completed(false, "Não foi possível renovar a sessão Iku agora.")
+            }
+        }
     }
 
     private fun getFirebaseToken(activity: Activity, user: FirebaseUser, completed: (Boolean, String) -> Unit) {
@@ -153,12 +180,12 @@ internal object IkuAuthClient {
         }
     }
 
-    private fun refresh(activity: Activity, refreshToken: String, completed: (ApiResult) -> Unit) {
+    private fun refresh(context: Context, refreshToken: String, completed: (ApiResult) -> Unit) {
         val payload = JSONObject().put("refresh_token", refreshToken)
-        post(activity, "/api/auth/refresh", payload, completed)
+        post(context, "/api/auth/refresh", payload, completed)
     }
 
-    private fun post(activity: Activity, path: String, payload: JSONObject, completed: (ApiResult) -> Unit) {
+    private fun post(context: Context, path: String, payload: JSONObject, completed: (ApiResult) -> Unit) {
         val request = Request.Builder()
             .url(BASE_URL + path)
             .post(payload.toString().toRequestBody(jsonType))
@@ -166,7 +193,7 @@ internal object IkuAuthClient {
             .build()
         http.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
-                activity.runOnUiThread { completed(ApiResult(0, JSONObject())) }
+                mainHandler.post { completed(ApiResult(0, JSONObject())) }
             }
 
             override fun onResponse(call: Call, response: Response) {
@@ -174,7 +201,7 @@ internal object IkuAuthClient {
                     val body = it.body?.string().orEmpty()
                     ApiResult(it.code, if (body.isBlank()) JSONObject() else runCatching { JSONObject(body) }.getOrDefault(JSONObject()))
                 }
-                activity.runOnUiThread { completed(result) }
+                mainHandler.post { completed(result) }
             }
         })
     }

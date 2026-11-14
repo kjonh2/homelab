@@ -3,6 +3,7 @@ package com.iknowu.app.homestatus
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import com.iknowu.app.IkuAuthClient
 import com.iknowu.app.IkuAuthSessionStore
 import okhttp3.Call
 import okhttp3.Callback
@@ -38,6 +39,10 @@ class HomeStatusApi(context: Context) {
     private val main = Handler(Looper.getMainLooper())
 
     fun fetchSnapshot(cb: (HomeSnapshot?, String?) -> Unit) {
+        fetchSnapshot(cb, refreshOnUnauthorized = true)
+    }
+
+    private fun fetchSnapshot(cb: (HomeSnapshot?, String?) -> Unit, refreshOnUnauthorized: Boolean) {
         val accessToken = IkuAuthSessionStore.read(appContext)?.optString("access_token").orEmpty()
         if (accessToken.isBlank()) {
             cb(null, "Liga a sessão Iku em Perfil para consultar o estado dos serviços.")
@@ -60,7 +65,13 @@ class HomeStatusApi(context: Context) {
                 val body = response.use { it.body?.string().orEmpty() }
                 main.post {
                     when {
-                        status == 401 -> cb(null, "A sessão Iku expirou. Liga-a novamente em Perfil.")
+                        status == 401 && refreshOnUnauthorized -> {
+                            IkuAuthClient.refreshSavedSession(appContext) { refreshed, message ->
+                                if (refreshed) fetchSnapshot(cb, refreshOnUnauthorized = false)
+                                else cb(null, message)
+                            }
+                        }
+                        status == 401 -> cb(null, "A sessão Iku continua inválida. Liga-a novamente em Perfil.")
                         status == 403 -> cb(null, "A sessão Iku não tem acesso ao estado dos serviços.")
                         status !in 200..299 -> cb(null, "O portal Iku respondeu com HTTP $status.")
                         else -> try {
