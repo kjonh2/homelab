@@ -65,6 +65,7 @@ class DrisaVoiceActivity : AppCompatActivity() {
     private lateinit var endpoint: EditText
     private lateinit var deviceId: EditText
     private lateinit var token: EditText
+    private lateinit var tokenStatus: TextView
     private lateinit var status: TextView
     private lateinit var transcript: TextView
     private lateinit var connectButton: Button
@@ -90,7 +91,20 @@ class DrisaVoiceActivity : AppCompatActivity() {
         buildScreen()
         endpoint.setText(prefs.getString("endpoint", "wss://iknowu.tail2931da.ts.net/"))
         deviceId.setText(prefs.getString("device", "redmi-note-11"))
-        token.setText(runCatching { SecureDrisaSettings.load(this) }.getOrNull().orEmpty())
+        token.setText("")
+        val savedToken = runCatching { SecureDrisaSettings.load(this) }
+        tokenStatus.text = when {
+            savedToken.isFailure -> "Não foi possível ler o token guardado. Introduz novamente."
+            savedToken.getOrNull().isNullOrBlank() -> "Token não configurado neste telemóvel."
+            else -> "Token guardado de forma cifrada neste telemóvel."
+        }
+        token.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                if (!s.isNullOrBlank()) tokenStatus.text = "O token será guardado cifrado ao ligar."
+            }
+            override fun afterTextChanged(s: android.text.Editable?) = Unit
+        })
         connectButton.setOnClickListener { if (socket == null) connect() else disconnect() }
         refreshModelsButton.setOnClickListener { requestModelCatalog() }
         loadModelButton.setOnClickListener { loadSelectedModel() }
@@ -139,6 +153,9 @@ class DrisaVoiceActivity : AppCompatActivity() {
         root.addView(deviceId, matchWrap())
         root.addView(label("Token da gateway"))
         root.addView(token, matchWrap())
+        tokenStatus = label("Token não configurado neste telemóvel.")
+        tokenStatus.textSize = 12f
+        root.addView(tokenStatus, matchWrap())
         root.addView(connectButton, matchWrap())
         root.addView(status, matchWrap())
         root.addView(talkButton, matchWrap())
@@ -175,8 +192,13 @@ class DrisaVoiceActivity : AppCompatActivity() {
         val secret = token.text.toString().ifBlank {
             runCatching { SecureDrisaSettings.load(this) }.getOrNull().orEmpty()
         }
-        if (!url.startsWith("wss://") || id.isBlank() || secret.isBlank()) {
-            setStatus("Indica um endereço wss://, o identificador e o token.")
+        if (!url.startsWith("wss://") || id.isBlank()) {
+            setStatus("Indica um endereço wss:// e o identificador deste telemóvel.")
+            return
+        }
+        if (secret.isBlank()) {
+            tokenStatus.text = "Token não configurado neste telemóvel."
+            setStatus("Introduz o token da gateway para ligar à Drisa.")
             return
         }
         if (Build.VERSION.SDK_INT < 23) {
@@ -190,6 +212,7 @@ class DrisaVoiceActivity : AppCompatActivity() {
             return
         }
         token.setText("")
+        tokenStatus.text = "Token guardado de forma cifrada neste telemóvel."
         setStatus("A ligar à gateway privada…")
         val request = Request.Builder().url(url).build()
         socket = client.newWebSocket(request, object : WebSocketListener() {
