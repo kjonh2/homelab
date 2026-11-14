@@ -2,6 +2,7 @@
 
 import { type FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
+import { GoogleLoginButton, type GoogleLoginConfig } from "./google-login-button";
 
 type Enrollment = { totp_secret: string; otpauth_uri: string; recovery_codes: string[] };
 
@@ -23,6 +24,7 @@ export function LoginForm() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [bootstrapToken, setBootstrapToken] = useState("");
+  const [pendingFirebaseToken, setPendingFirebaseToken] = useState("");
   const [totpCode, setTotpCode] = useState("");
   const [mfaRequired, setMfaRequired] = useState(false);
   const [enrollment, setEnrollment] = useState<Enrollment | null>(null);
@@ -37,6 +39,27 @@ export function LoginForm() {
     setMessage("");
     try {
       if (mode === "login") {
+        if (pendingFirebaseToken) {
+          const { response } = await postAuth("firebase/exchange", {
+            id_token: pendingFirebaseToken,
+            client: "web",
+            device_name: "Iku Portal",
+            totp_code: totpCode,
+          });
+          if (!response.ok) {
+            setError(response.status === 401
+              ? "O código de autenticação não foi aceite. Aguarda o próximo código e tenta novamente."
+              : "Não foi possível confirmar a sessão Google. Tenta novamente.");
+            return;
+          }
+          setPendingFirebaseToken("");
+          setTotpCode("");
+          setMfaRequired(false);
+          router.replace("/");
+          router.refresh();
+          return;
+        }
+
         const { response, payload } = await postAuth("login", {
           email,
           password,
@@ -101,6 +124,61 @@ export function LoginForm() {
     }
   }
 
+  async function handleGoogleCredential(googleCredential: string, config: GoogleLoginConfig) {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const firebaseResponse = await fetch(
+        `https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp?key=${encodeURIComponent(config.apiKey)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          cache: "no-store",
+          body: JSON.stringify({
+            postBody: new URLSearchParams({ id_token: googleCredential, providerId: "google.com" }).toString(),
+            requestUri: window.location.origin,
+            returnSecureToken: true,
+            returnIdpCredential: true,
+            autoCreate: false,
+          }),
+        },
+      );
+      const firebasePayload = await firebaseResponse.json().catch(() => ({})) as Record<string, unknown>;
+      const firebaseIdToken = String(firebasePayload.idToken ?? "");
+      if (!firebaseResponse.ok || !firebaseIdToken) {
+        setError("Não foi possível validar a conta Google. Tenta novamente ou usa o login do Iku.");
+        return;
+      }
+
+      const { response, payload } = await postAuth("firebase/exchange", {
+        id_token: firebaseIdToken,
+        client: "web",
+        device_name: "Iku Portal",
+      });
+      if (response.status === 428 && payload.detail === "mfa_required") {
+        setPendingFirebaseToken(firebaseIdToken);
+        setMfaRequired(true);
+        setMessage("Introduz o código de seis dígitos da tua app autenticadora para concluir a sessão Google.");
+        return;
+      }
+      if (!response.ok) {
+        setError(response.status === 403 && payload.detail === "mfa_setup_required"
+          ? "A conta de administrador precisa de concluir a configuração de 2FA. Entra com o login local para configurar."
+          : response.status === 401
+            ? "Esta conta Google não está associada a uma conta Iku ativa."
+            : "Não foi possível iniciar sessão com Google. Tenta novamente.");
+        return;
+      }
+      router.replace("/");
+      router.refresh();
+    } catch {
+      setError("Não foi possível contactar o serviço Google ou o serviço de autenticação.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <>
       <p className="login-intro">Sessão local segura para o portal Iku.</p>
@@ -108,12 +186,14 @@ export function LoginForm() {
       {message && <p className="auth-message auth-info" role="status">{message}</p>}
 
       <form onSubmit={handleSubmit}>
-        <label className="field-label" htmlFor="email">Email</label>
-        <input id="email" className="text-input" type="email" autoComplete="username" required maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} />
+        {!pendingFirebaseToken && <>
+          <label className="field-label" htmlFor="email">Email</label>
+          <input id="email" className="text-input" type="email" autoComplete="username" required maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} />
 
-        {!enrollment && <>
-          <label className="field-label" htmlFor="password">Palavra-passe</label>
-          <input id="password" className="text-input" type="password" autoComplete={mode === "bootstrap" ? "new-password" : "current-password"} required minLength={mode === "bootstrap" ? 12 : 1} maxLength={1024} value={password} onChange={(event) => setPassword(event.target.value)} />
+          {!enrollment && <>
+            <label className="field-label" htmlFor="password">Palavra-passe</label>
+            <input id="password" className="text-input" type="password" autoComplete={mode === "bootstrap" ? "new-password" : "current-password"} required minLength={mode === "bootstrap" ? 12 : 1} maxLength={1024} value={password} onChange={(event) => setPassword(event.target.value)} />
+          </>}
         </>}
 
         {mode === "bootstrap" && !enrollment && <>
@@ -133,10 +213,17 @@ export function LoginForm() {
           <input id="totp-code" className="text-input" type="text" inputMode="numeric" autoComplete="one-time-code" required maxLength={16} value={totpCode} onChange={(event) => setTotpCode(event.target.value)} />
         </>}
 
+        {pendingFirebaseToken && <p className="login-security">A conta Google foi validada. Confirma o segundo fator para abrir o espaço.</p>}
+
         <button className="button button-primary login-submit" type="submit" disabled={busy}>
           {busy ? "A aguardar…" : mode === "bootstrap" ? (enrollment ? "Confirmar 2FA" : "Configurar administrador") : (mfaRequired ? "Confirmar e entrar" : "Entrar")}
         </button>
       </form>
+
+      {mode === "login" && !pendingFirebaseToken && <>
+        <div className="login-divider" aria-hidden="true"><span>ou</span></div>
+        <GoogleLoginButton disabled={busy} onCredential={(credential, config) => { void handleGoogleCredential(credential, config); }} />
+      </>}
 
       {!enrollment && <button className="auth-mode-toggle" type="button" onClick={() => {
         setMode(mode === "login" ? "bootstrap" : "login");
@@ -144,6 +231,7 @@ export function LoginForm() {
         setMessage("");
         setPassword("");
         setBootstrapToken("");
+        setPendingFirebaseToken("");
         setTotpCode("");
         setMfaRequired(false);
       }}>

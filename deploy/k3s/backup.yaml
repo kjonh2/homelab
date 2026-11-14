@@ -248,7 +248,7 @@ spec:
               command:
                 - python3
                 - -B
-                - /scripts/snapshot_sqlite.py
+                - /scripts/backup-sqlite.py
               volumeMounts:
                 - name: storage
                   mountPath: /source/storage
@@ -284,6 +284,7 @@ spec:
                   add:
                     - DAC_READ_SEARCH
                     - DAC_OVERRIDE
+                    - CHOWN
           containers:
             - name: restic
               image: restic/restic:0.19.1

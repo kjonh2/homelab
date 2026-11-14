@@ -26,7 +26,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: web
-          image: iku-portal:0.1.9
+          image: iku-portal:0.1.10
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -40,6 +40,8 @@ spec:
               value: http://iku-auth.iku.svc.cluster.local:8080
             - name: IKU_AUTH_ENFORCE
               value: "true"
+            - name: IKU_FIREBASE_CONFIG_PATH
+              value: /run/iku-firebase/google-services.json
           resources:
             requests:
               cpu: 100m
@@ -70,6 +72,9 @@ spec:
               mountPath: /tmp
             - name: next-cache
               mountPath: /app/.next/cache
+            - name: firebase-config
+              mountPath: /run/iku-firebase
+              readOnly: true
       volumes:
         - name: tmp
           emptyDir:
@@ -77,6 +82,12 @@ spec:
         - name: next-cache
           emptyDir:
             sizeLimit: 128Mi
+        - name: firebase-config
+          configMap:
+            name: iku-firebase-web
+            items:
+              - key: google-services.json
+                path: google-services.json
 ---
 apiVersion: v1
 kind: Service

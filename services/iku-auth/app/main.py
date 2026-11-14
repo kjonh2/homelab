@@ -136,6 +136,7 @@ class AdminInviteRevokeInput(StrictModel):
 class FirebaseExchangeInput(StrictModel):
     id_token: str = Field(min_length=100, max_length=8192)
     totp_code: str | None = Field(default=None, min_length=6, max_length=16)
+    client: str = Field(default="android", pattern="^(web|android)$")
     device_name: str = Field(default="Iku Android", max_length=100)
 
 
@@ -810,7 +811,9 @@ def login(body: LoginInput, request: Request, response: Response) -> dict[str, A
 
 
 @app.post("/v1/auth/firebase/exchange")
-def firebase_exchange(body: FirebaseExchangeInput, request: Request) -> dict[str, Any]:
+def firebase_exchange(body: FirebaseExchangeInput, request: Request, response: Response) -> dict[str, Any]:
+    if body.client == "web":
+        verify_origin(request, required=True)
     claims = verify_firebase_id_token(body.id_token)
     email = claims["email"]
     firebase_uid = claims["sub"]
@@ -828,14 +831,14 @@ def firebase_exchange(body: FirebaseExchangeInput, request: Request) -> dict[str
         user = identity or db.execute("SELECT * FROM users WHERE email=? COLLATE NOCASE", (email,)).fetchone()
         if not user or user["disabled"]:
             record_attempt(db, email, ip, False)
-            audit(db, user["id"] if user else None, "auth.firebase.exchange", "denied", "android", ip)
+            audit(db, user["id"] if user else None, "auth.firebase.exchange", "denied", body.client, ip)
             db.commit()
             raise HTTPException(status_code=401, detail="invalid_credentials")
 
         mapped = db.execute("SELECT user_id FROM firebase_identities WHERE firebase_uid=?", (firebase_uid,)).fetchone()
         if mapped and mapped["user_id"] != user["id"]:
             record_attempt(db, email, ip, False)
-            audit(db, user["id"], "auth.firebase.exchange", "denied", "android", ip)
+            audit(db, user["id"], "auth.firebase.exchange", "denied", body.client, ip)
             db.commit()
             raise HTTPException(status_code=401, detail="invalid_credentials")
         if not mapped:
@@ -853,19 +856,23 @@ def firebase_exchange(body: FirebaseExchangeInput, request: Request) -> dict[str
             raise HTTPException(status_code=403, detail="mfa_setup_required")
         if factor and factor["enabled"]:
             if not body.totp_code:
-                audit(db, user["id"], "auth.firebase.exchange.mfa", "challenge", "android", ip)
+                audit(db, user["id"], "auth.firebase.exchange.mfa", "challenge", body.client, ip)
                 db.commit()
                 raise HTTPException(status_code=428, detail="mfa_required")
             if not check_totp_or_recovery(db, user["id"], body.totp_code):
                 record_attempt(db, email, ip, False)
-                audit(db, user["id"], "auth.firebase.exchange.mfa", "denied", "android", ip)
+                audit(db, user["id"], "auth.firebase.exchange.mfa", "denied", body.client, ip)
                 db.commit()
                 raise HTTPException(status_code=401, detail="invalid_credentials")
 
         record_attempt(db, email, ip, True)
-        issued = issue_session(db, user, "android", body.device_name.strip() or "Iku Android", ip)
-        audit(db, user["id"], "auth.firebase.exchange", "success", "android", ip)
+        device_name = body.device_name.strip() or ("Iku Portal" if body.client == "web" else "Iku Android")
+        issued = issue_session(db, user, body.client, device_name, ip)
+        audit(db, user["id"], "auth.firebase.exchange", "success", body.client, ip)
         db.commit()
+        cookie_token = issued.pop("_cookie_token", None)
+        if cookie_token:
+            set_session_cookie(response, cookie_token, WEB_SESSION_TTL)
         return issued
     except Exception:
         if db.in_transaction:

@@ -596,6 +596,44 @@ class AuthServiceTests(unittest.TestCase):
         self.assertTrue(response.json()["access_token"])
         self.assertTrue(response.json()["refresh_token"])
 
+    def test_web_firebase_exchange_requires_origin_and_sets_cookie_without_exposing_tokens(self) -> None:
+        self.enable_mfa()
+        self.next_totp_window()
+        claims = {
+            "sub": "firebase-user-1",
+            "email": "admin@example.test",
+            "email_verified": True,
+            "firebase": {"sign_in_provider": "google.com"},
+        }
+        body = {"id_token": "x" * 120, "client": "web", "device_name": "Iku Portal"}
+        with patch.object(main, "verify_firebase_id_token", return_value=claims):
+            missing_origin = self.client.post("/v1/auth/firebase/exchange", json=body)
+            self.assertEqual(missing_origin.status_code, 403)
+            self.assertEqual(missing_origin.json()["detail"], "origin_required")
+
+            headers = {"Origin": "https://portal.test"}
+            challenge = self.client.post("/v1/auth/firebase/exchange", headers=headers, json=body)
+            self.assertEqual(challenge.status_code, 428)
+
+            code = main.totp_at(self.mfa_secret, main.totp_counter(self.mfa_secret))
+            response = self.client.post(
+                "/v1/auth/firebase/exchange",
+                headers=headers,
+                json={**body, "totp_code": code},
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["session"]["client"], "web")
+        self.assertNotIn("access_token", response.json())
+        self.assertNotIn("refresh_token", response.json())
+        cookie = response.headers["set-cookie"].lower()
+        self.assertIn("httponly", cookie)
+        self.assertIn("secure", cookie)
+        self.assertIn("samesite=strict", cookie)
+        session = self.client.get("/v1/auth/session")
+        self.assertEqual(session.status_code, 200, session.text)
+        self.assertEqual(session.json()["user"]["roles"], ["admin"])
+
     def test_firebase_exchange_refuses_admin_before_totp_is_enabled(self) -> None:
         claims = {
             "sub": "firebase-user-1",

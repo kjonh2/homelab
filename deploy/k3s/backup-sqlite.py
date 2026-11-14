@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import sqlite3
+import os
 import shutil
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -24,27 +25,44 @@ def snapshot(name: str, pattern: str) -> None:
         raise RuntimeError(f"Expected {name} database at {source_path}")
 
     print(f"Snapshot starting: {name}", flush=True)
+    source_stat = source_path.stat()
+
+    def repair_sidecar_ownership() -> None:
+        # The backup init container runs as root to read databases owned by
+        # several services. SQLite can create WAL sidecars when opening a
+        # read-only source; restore their ownership before and after the
+        # snapshot connection is released. Their existing mode is sufficient:
+        # a newly created 0600 sidecar becomes writable by its owner after chown.
+        for suffix in ("-wal", "-shm"):
+            sidecar = Path(f"{source_path}{suffix}")
+            try:
+                os.chown(sidecar, source_stat.st_uid, source_stat.st_gid)
+            except FileNotFoundError:
+                continue
+
     source_uri = f"file:{source_path.as_posix()}?mode=ro"
     output_path = OUTPUT / f"{name}.sqlite3"
+    source_connection: sqlite3.Connection | None = None
+    target_connection: sqlite3.Connection | None = None
     try:
         source_connection = sqlite3.connect(source_uri, uri=True, timeout=60)
-    except sqlite3.Error as exc:
-        raise RuntimeError(f"Cannot open {name} source {source_path}: {exc}") from exc
-    try:
+        # Opening the source as root may create 0600 WAL sidecars owned by
+        # root. Restore the database owner's access immediately, then again
+        # after the connection closes in case SQLite recreates either file.
+        repair_sidecar_ownership()
         target_connection = sqlite3.connect(output_path, timeout=60)
+        source_connection.backup(target_connection, pages=1024, sleep=0.05)
+        result = target_connection.execute("PRAGMA integrity_check").fetchone()
+        if not result or result[0] != "ok":
+            raise RuntimeError(f"SQLite integrity check failed for {name}")
     except sqlite3.Error as exc:
-        source_connection.close()
-        raise RuntimeError(f"Cannot open {name} snapshot {output_path}: {exc}") from exc
-
-    with source_connection as source:
-        with target_connection as target:
-            try:
-                source.backup(target, pages=1024, sleep=0.05)
-                result = target.execute("PRAGMA integrity_check").fetchone()
-            except sqlite3.Error as exc:
-                raise RuntimeError(f"SQLite operation failed for {name}: {exc}") from exc
-            if not result or result[0] != "ok":
-                raise RuntimeError(f"SQLite integrity check failed for {name}")
+        raise RuntimeError(f"SQLite snapshot failed for {name}: {exc}") from exc
+    finally:
+        if target_connection is not None:
+            target_connection.close()
+        if source_connection is not None:
+            source_connection.close()
+        repair_sidecar_ownership()
 
     print(f"SQLite snapshot verified: {name}")
 
