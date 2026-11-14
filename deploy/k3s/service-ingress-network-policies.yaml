@@ -54,6 +54,9 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: iku-public-site
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: iku-portal
       ports:
         - protocol: TCP
           port: 80
