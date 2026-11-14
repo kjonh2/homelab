@@ -10,6 +10,20 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+_AUDIO_CPP_MODEL_IDS = {
+    "audio-cpp/audio.cpp-gguf/moss-transcribe-diarize-gguf": "moss",
+    "audio-cpp/audio.cpp-gguf/parakeet-tdt-0.6b-v3-gguf": "parakeet",
+}
+
+
+def _normalize_api_model_id(model: str, host: str) -> str:
+    """Use the short model IDs exposed by the homelab audio.cpp server."""
+    selected = (model or "").strip()
+    if host.strip().lower() in {"homelab", "cluster"}:
+        return _AUDIO_CPP_MODEL_IDS.get(selected.casefold(), selected)
+    return selected
+
+
 class SpeechProcessor:
     _whisper_lock = threading.Lock()  # Only 1 transcription at a time
     _whisper_model = None
@@ -109,7 +123,9 @@ class SpeechProcessor:
         model = model or os.environ.get(
             "DRISA_STT_MODEL", "audio-cpp/audio.cpp-gguf/MOSS-Transcribe-Diarize-GGUF"
         )
-        if os.environ.get("DRISA_STT_HOST", "pc").strip().lower() == "pc":
+        stt_host = os.environ.get("DRISA_STT_HOST", "pc").strip().lower()
+        model = _normalize_api_model_id(model, stt_host)
+        if stt_host == "pc":
             self._ensure_stt_model_loaded(model)
         buf = io.BytesIO()
         sf.write(buf, audio_data.astype(np.float32), self.sample_rate, format="WAV", subtype="PCM_16")
