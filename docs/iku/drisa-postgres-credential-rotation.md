@@ -118,7 +118,7 @@ The Kubernetes Secret and protected laptop configuration remain the durable cred
 
 ## Most recent rotation
 
-On 2026-11-14, the PostgreSQL role password was rotated after the backup and restore checks passed. The Kubernetes Secret and laptop DSN were updated, and the StatefulSet returned to `2/2 Running`. The laptop reconnected with the new credential; a read-only query returned 1 conversation and 166 messages, and two stored message ciphertexts decrypted with the unchanged Fernet key. The logical-backup sidecar refreshed a new dump. The protected local `postgres-password.pending` file remains temporarily and must be deleted manually after this session; its ACL is restricted to the Windows user. No password, DSN, conversation text, or key was recorded in this document.
+On 2026-11-14, the PostgreSQL role password was rotated after the backup and restore checks passed. The Kubernetes Secret and laptop DSN were updated, and the StatefulSet returned to `2/2 Running`. The laptop reconnected with the new credential; a read-only query returned 1 conversation and 166 messages, and two stored message ciphertexts decrypted with the unchanged Fernet key. The logical-backup sidecar refreshed a new dump. The protected local `postgres-password.pending` file was removed after verifying the Secret and laptop connection; a follow-up filesystem check confirmed the file is absent. No password, DSN, conversation text, or key was recorded in this document.
 
 ## Recovery
 
