@@ -115,11 +115,28 @@ Loopback-only systemd forwards reserve these tailnet endpoints:
 | Nextcloud | `https://vps-4e5174e4.tail2931da.ts.net:8444/` |
 | LFM3 API | `https://vps-4e5174e4.tail2931da.ts.net:8445/v1` |
 
-The Nextcloud administrator name is `ikuadmin`. Its generated password and the n8n encryption key are stored in `/etc/rancher/k3s/secrets/iku-data.env` on the VPS with mode 0600. Retrieve the initial Nextcloud password over SSH only when needed:
+The initial Nextcloud administrator is `ikuadmin`. There is no public self-registration; the Iku portal's invitations create Iku accounts, not Nextcloud accounts. Its initial password is stored in `/etc/rancher/k3s/secrets/iku-data.env` on the VPS with mode 0600. Retrieve it only in the private VPS terminal and never paste it into chat or logs:
 
 ```bash
 sudo awk -F= '$1 == "NEXTCLOUD_ADMIN_PASSWORD" {print $2}' /etc/rancher/k3s/secrets/iku-data.env
 ```
+
+The secret contains only the password used at initial installation; it will not reflect a later password change inside Nextcloud. To set a new password when the current one is unknown, connect to the VPS through Tailscale SSH and run the interactive `occ` reset:
+
+```bash
+sudo k3s kubectl -n iku exec -it deploy/nextcloud -- su -s /bin/sh www-data -c 'php /var/www/html/occ user:resetpassword ikuadmin'
+```
+
+If the public page shows an internal server error, check the live login route, pod status, and recent logs before changing permissions or restoring data:
+
+```bash
+curl -fsS -o /dev/null -w '%{http_code}\n' https://cloud.iknowu.org/index.php/login
+sudo k3s kubectl -n iku get pods -l app.kubernetes.io/name=nextcloud
+sudo k3s kubectl -n iku logs deploy/nextcloud --since=30m
+sudo k3s kubectl -n iku exec deploy/nextcloud -- su -s /bin/sh www-data -c 'php /var/www/html/occ status'
+```
+
+On 2026-11-14, a logged request failed with SQLite `attempt to write a readonly database`; the Nextcloud Pod was subsequently recreated. The current PVC mounts read-write, the SQLite file and data directory are writable by `www-data`, and the login route returned HTTP 200. If this error recurs, inspect the pod mount and node filesystem state before applying a permission change.
 
 Nextcloud and n8n are configured for the VPS's Tailscale MagicDNS name and private HTTPS ports. Tailscale Serve routes are active for the portal, n8n, Nextcloud, and LFM3 API and are tailnet-only. Do not expose these ClusterIP Services directly to the public Internet. Local-path volumes survive pod restarts but are not backups or replicated storage.
 
