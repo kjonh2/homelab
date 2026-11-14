@@ -89,13 +89,15 @@ class ModelCatalogTests(unittest.TestCase):
         import requests
 
         class CatalogResponse:
+            def __init__(self, loaded):
+                self.loaded = loaded
+
             @staticmethod
             def raise_for_status():
                 return None
 
-            @staticmethod
-            def json():
-                return {"data": [{"id": "lfm3-text", "loaded": False}]}
+            def json(self):
+                return {"data": [{"id": "lfm3-text", "loaded": self.loaded}]}
 
         class LoadResponse:
             @staticmethod
@@ -111,9 +113,10 @@ class ModelCatalogTests(unittest.TestCase):
             with (
                 patch.object(gateway, "BASE", Path(directory)),
                 patch.object(gateway, "load_config", return_value={"llm_host": "vps", "llm_model": "lfm3-text"}),
-                patch.object(requests, "get", return_value=CatalogResponse()),
+                patch.object(requests, "get", side_effect=[CatalogResponse(False), CatalogResponse(False), CatalogResponse(True)]) as get,
                 patch.object(requests, "post", return_value=LoadResponse()) as post,
                 patch.object(gateway, "_save_model_selection") as save_selection,
+                patch.object(gateway.time, "sleep") as sleep,
             ):
                 result = gateway.load_model_for_app("vps", "llm", "lfm3-text")
 
@@ -121,6 +124,8 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(post.call_args.args[0], gateway._VPS_MODELS_URL + "/load")
         self.assertEqual(post.call_args.kwargs["json"], {"model": "lfm3-text"})
         self.assertEqual(post.call_args.kwargs["headers"]["Authorization"], "Bearer test-vps-key")
+        self.assertEqual(get.call_count, 3)
+        sleep.assert_called_once()
         save_selection.assert_called_once_with("vps", "llm", "lfm3-text")
 
 

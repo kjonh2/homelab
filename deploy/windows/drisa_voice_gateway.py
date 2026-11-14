@@ -370,6 +370,16 @@ def load_model_for_app(host: str, category: str, model_id: str) -> str:
         result = response.json()
         if result.get("success") is False:
             raise RuntimeError("A VPS recusou o carregamento do modelo.")
+        deadline = time.monotonic() + 240
+        while True:
+            loaded_model = next((item for item in _vps_model_catalog("llm")["models"]
+                                 if item["id"] == model_id), None)
+            if loaded_model and loaded_model["loaded"]:
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(f"O modelo {model_id} não ficou pronto na VPS dentro do prazo.")
+            time.sleep(min(2, remaining))
         _save_model_selection(host, category, model_id)
         return "Modelo carregado na VPS."
     if host == "homelab" and category in ("stt", "tts"):
