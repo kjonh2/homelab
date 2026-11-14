@@ -4,8 +4,8 @@
 - `iknowu.org` -> existing tunnel / current root routing
 - `www.iknowu.org` -> existing CNAME target already configured
 
-## VPS-backed services
-These should point to the VPS and be served by the Iku proxy on the VPS:
+## Serviços previstos no VPS
+Estes serviços devem ser publicados pelo Cloudflare Tunnel; os registos públicos não devem expor diretamente o IP de origem:
 - `gitlab.iknowu.org`
 - `cloud.iknowu.org`
 - `n8n.iknowu.org`
@@ -14,9 +14,10 @@ These should point to the VPS and be served by the Iku proxy on the VPS:
 - `webui.iknowu.org`
 - `grafana.iknowu.org`
 
-## Compose routing
-Each hostname should map to one container through the proxy:
-- `cloud.iknowu.org` -> `iku-nextcloud`
+The public `cloud.iknowu.org` hostname is served through the `iku-public-vps` Cloudflare Tunnel. Its ingress targets the Nginx sidecar on port 80, and Nginx proxies only that hostname to the Nextcloud ClusterIP service. Keep the VPS web ports closed; the tunnel is the public ingress.
+
+## Roteamento Kubernetes atual e planeado
+- `cloud.iknowu.org` -> `iku-public-vps` tunnel -> public-site Nginx -> `nextcloud.iku.svc.cluster.local:80`
 - `n8n.iknowu.org` -> `iku-n8n`
 - `ai.iknowu.org` -> `iku-ai`
 - `webui.iknowu.org` -> `iku-webui`

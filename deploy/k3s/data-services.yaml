@@ -83,6 +83,7 @@ data:
 
     as_www_data 'php /var/www/html/occ config:system:set trusted_domains 0 --value=localhost'
     as_www_data 'php /var/www/html/occ config:system:set trusted_domains 1 --value="$NEXTCLOUD_TRUSTED_DOMAIN"'
+    as_www_data 'php /var/www/html/occ config:system:set trusted_domains 2 --value="$NEXTCLOUD_PUBLIC_DOMAIN"'
     as_www_data 'php /var/www/html/occ config:system:set overwritehost --value="$OVERWRITEHOST"'
     as_www_data 'php /var/www/html/occ config:system:set overwriteprotocol --value="$OVERWRITEPROTOCOL"'
     as_www_data 'php /var/www/html/occ config:system:set overwrite.cli.url --value="$OVERWRITECLIURL"'
@@ -107,7 +108,7 @@ spec:
         app.kubernetes.io/name: nextcloud
         app.kubernetes.io/part-of: iku
       annotations:
-        iku.iknowu.org/nextcloud-startup-version: "4"
+        iku.iknowu.org/nextcloud-startup-version: "5"
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -129,17 +130,19 @@ spec:
                   name: iku-data-secrets
                   key: NEXTCLOUD_ADMIN_PASSWORD
             - name: NEXTCLOUD_TRUSTED_DOMAINS
-              value: localhost vps-4e5174e4.tail2931da.ts.net:8444
+              value: localhost vps-4e5174e4.tail2931da.ts.net:8444 cloud.iknowu.org
             - name: NEXTCLOUD_TRUSTED_DOMAIN
               value: vps-4e5174e4.tail2931da.ts.net:8444
+            - name: NEXTCLOUD_PUBLIC_DOMAIN
+              value: cloud.iknowu.org
             - name: NEXTCLOUD_DATA_DIR
               value: /var/www/html/data
             - name: OVERWRITEPROTOCOL
               value: https
             - name: OVERWRITEHOST
-              value: vps-4e5174e4.tail2931da.ts.net:8444
+              value: cloud.iknowu.org
             - name: OVERWRITECLIURL
-              value: https://vps-4e5174e4.tail2931da.ts.net:8444
+              value: https://cloud.iknowu.org
           command: ["/bin/sh", "/opt/iku/start-nextcloud.sh"]
           ports:
             - name: http

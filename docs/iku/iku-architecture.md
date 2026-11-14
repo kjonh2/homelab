@@ -14,7 +14,7 @@ The three machines have different jobs. They are not identical copies of the Iku
 - The Drisa voice gateway on the laptop is reached through its tailnet-only Tailscale Serve hostname. The gateway sends transcripts to the selected LFM3 host and sends only the final text to TTS.
 - LFM3 runs on the VPS at a private ClusterIP and tailnet HTTPS forward. One model is resident at a time; the uncensored LFM3 text model is the current selection.
 - MOSS, Parakeet, and Kokoro are selected from the laptop's local model service in Normal mode. In Gaming mode, the laptop watchdog maintains a loopback-only SSH forward to the homelab audio service and directs STT/TTS there. The homelab worker is therefore a dependency for voice I/O in this mode.
-- The public React landing page is served by unprivileged Nginx. `app.iknowu.org` is proxied by that Nginx instance to the Iku portal service. Cloudflare Tunnel is the public ingress; application ports are not opened on the VPS firewall.
+- The public React landing page is served by unprivileged Nginx. `app.iknowu.org` is proxied by that Nginx instance to the Iku portal service, and `cloud.iknowu.org` is proxied to Nextcloud. Cloudflare Tunnel is the public ingress; application ports are not opened on the VPS firewall.
 - PostgreSQL stores encrypted Drisa messages and summaries on a VPS-local PVC. Restic sends encrypted backups to the homelab receiver; the restore drill verified the database backup path. This is recovery, not live database replication.
 
 ## Availability boundaries
