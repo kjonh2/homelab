@@ -66,6 +66,7 @@ curl.exe -sS -o NUL -w 'status HTTP %{http_code}\n' https://cloud.iknowu.org/sta
 ## Restore cautions
 
 - Preserve the Restic password separately from the homelab disk. Without it, the encrypted repository cannot be restored.
+- If the Drisa PostgreSQL password is exposed or needs rotation, follow [the dedicated credential rotation procedure](drisa-postgres-credential-rotation.md). It preserves the existing PVC and Fernet key.
 - The backup receiver and repository reside on the homelab's local storage. Loss of that machine can also lose the off-host backup copy.
 - A completed SQLite restore drill verifies those snapshots only. It does not verify PostgreSQL, Kubernetes secret recovery, PVC recreation, public ingress, or full VPS rebuild.
 - Do not open K3s, model, PostgreSQL, Nextcloud, or n8n ports to the public Internet to work around a failed tailnet route.
