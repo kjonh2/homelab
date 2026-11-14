@@ -95,6 +95,15 @@ jobs:
         working-directory: android
         run: bash gradlew --no-daemon :app:assembleModernDebug
 
+      - name: Upload modern debug APK
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: iku-android-modern-debug
+          path: android/app/build/outputs/apk/modern/debug/app-modern-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+
 
 
 
