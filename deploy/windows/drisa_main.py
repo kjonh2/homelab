@@ -25,6 +25,7 @@ from typing import Optional, Dict, Any
 # Add current directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from drisa_speech_text import is_utterance_echo, prepare_spoken_text
+from drisa_log_rotation import create_rotating_file_handler
 
 # Import our modules
 try:
@@ -48,7 +49,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("drisa_v2.log"),
+        create_rotating_file_handler("drisa_v2.log"),
         logging.StreamHandler()
     ]
 )

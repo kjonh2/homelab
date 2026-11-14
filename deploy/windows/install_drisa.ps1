@@ -10,6 +10,7 @@ $files = @(
     'audio_processor.py',
     'drisa-status.html',
     'drisa_main.py',
+    'drisa_log_rotation.py',
     'drisa_memory.py',
     'drisa_mode.ps1',
     'drisa_remote_config.ps1',

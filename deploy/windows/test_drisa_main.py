@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-with patch("logging.FileHandler", side_effect=lambda *_args, **_kwargs: logging.NullHandler()):
+with patch("logging.basicConfig"):
     from drisa_main import DrisaAssistant
 
 

@@ -17,6 +17,7 @@ import numpy as np
 import sounddevice as sd
 import requests
 from drisa_speech_text import prepare_spoken_text
+from drisa_log_rotation import append_rotating_text
 try:
     import webrtcvad
 except Exception:
@@ -136,8 +137,7 @@ SYSTEM = ("Tu és a Drisa, assistente de voz PT-PT do Kiko. Dá apenas a respost
 
 LOG = os.path.expanduser(r"~\drisa_local.log")
 def log(msg):
-    with open(LOG, "a", encoding="utf-8") as f:
-        f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + str(msg) + "\n")
+    append_rotating_text(LOG, time.strftime("%Y-%m-%d %H:%M:%S ") + str(msg))
 
 STATE = {"local": {"ativo": False, "vad": 0, "fala": False, "ultimo_stt": "", "ult_ms": 0},
          "homelab": {"ativo": False, "vad": 0, "fala": False, "micro": "", "ts": 0}}
