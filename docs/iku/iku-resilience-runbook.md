@@ -1,6 +1,6 @@
 # Iku resilience and recovery runbook
 
-Last verified: 2026-11-12. This runbook separates live redundancy from backup-based recovery.
+Last verified: 2026-11-14. This runbook separates live redundancy from backup-based recovery.
 
 ## Current layout
 
@@ -9,6 +9,7 @@ Last verified: 2026-11-12. This runbook separates live redundancy from backup-ba
 - Each public-site pod runs Nginx and a token-authenticated Cloudflare Tunnel connector. Both connectors registered four HTTP/2 edge connections in the latest check. The cluster's outbound QUIC check failed, so the connectors are configured to use HTTP/2.
 - `iknowu.org/` and `app.iknowu.org/login` returned HTTP 200 from the public Cloudflare address. This confirms normal public routing, not successful service during a full VPS outage.
 - Auth, portal, PostgreSQL, Nextcloud, n8n, and LFM3 remain on the VPS. Their PVC data uses local-path storage. The homelab stores encrypted Restic backups and is not an automatic replacement control plane.
+- On 2026-11-14, both K3s nodes were `Ready`; the two `iku-public-site` pods were `2/2 Running` on separate nodes. The latest SQLite and PostgreSQL restore-check jobs completed successfully. `cloud.iknowu.org/index.php/login` returned HTTP 200. These checks confirm the present services and recent backup restore, not recovery after losing the VPS host.
 
 ## Routine checks
 
