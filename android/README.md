@@ -18,7 +18,7 @@ Install or update a connected device without removing its app data:
 adb install -r app\build\outputs\apk\modern\debug\app-modern-debug.apk
 ```
 
-The debug APK is for private testing and is not signed for Play Store release. On MIUI, enable **Install via USB** and accept the device's install confirmation if prompted.
+The debug APK is for private testing and is not signed for Play Store release. On MIUI, enable **Install via USB** and accept the device's install confirmation if prompted. If ADB returns `INSTALL_FAILED_USER_RESTRICTED`, also check **Install unknown apps** for the file manager or package installer used to open the APK; MIUI can deny that permission even while **Install via USB** is enabled. Prefer granting the source app permission temporarily, then revoke it after installation if it is no longer needed.
 
 ## Iku Auth and Drisa
 
