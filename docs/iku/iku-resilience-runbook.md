@@ -1,6 +1,6 @@
 # Iku resilience and recovery runbook
 
-Last verified: 2026-11-14. This runbook separates live redundancy from backup-based recovery.
+Last verified: 2026-11-15. This runbook separates live redundancy from backup-based recovery.
 
 ## Current layout
 
@@ -10,6 +10,7 @@ Last verified: 2026-11-14. This runbook separates live redundancy from backup-ba
 - `iknowu.org/` and `app.iknowu.org/login` returned HTTP 200 from the public Cloudflare address. This confirms normal public routing, not successful service during a full VPS outage.
 - Auth, portal, PostgreSQL, Nextcloud, n8n, and LFM3 remain on the VPS. Their PVC data uses local-path storage. The homelab stores encrypted Restic backups and is not an automatic replacement control plane.
 - On 2026-11-14, both K3s nodes were `Ready`; the two `iku-public-site` pods were `2/2 Running` on separate nodes. The latest SQLite and PostgreSQL restore-check jobs completed successfully. `cloud.iknowu.org/index.php/login` returned HTTP 200. These checks confirm the present services and recent backup restore, not recovery after losing the VPS host.
+- Revalidated on 2026-11-15 over Tailscale SSH: both nodes are `Ready`; all nine pods in `iku` are Running with zero restarts; all 11 PVCs are Bound (10 in `iku`, one 100 GiB Restic repository in `iku-backup`). The Restic server pod is Running on the homelab. The daily backup CronJob is active at 03:17 Europe/Paris and its latest run was about 23 hours earlier. SQLite and PostgreSQL restore-check jobs are Complete. The weekly retention CronJob is active for Sunday 09:17 Europe/Paris with 7 daily, 4 weekly, and 6 monthly snapshots; its `lastScheduleTime` is still empty before its next run, so no retention run is verified yet.
 
 ## Routine checks
 
