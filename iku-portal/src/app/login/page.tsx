@@ -1,6 +1,11 @@
 import Link from "next/link";
+import { headers } from "next/headers";
+import { redirect } from "next/navigation";
 import { ArrowLeft, KeyRound, ShieldCheck, Sparkles } from "lucide-react";
 import { LoginForm } from "@/components/iku/login-form";
+
+const CANONICAL_PORTAL_ORIGIN = "https://app.iknowu.org";
+const TAILNET_PORTAL_HOST = "vps-4e5174e4.tail2931da.ts.net";
 
 function safeReturnTo(value: string | string[] | undefined): string {
   if (typeof value !== "string" || value.length > 2048 || !value.startsWith("/")) return "/";
@@ -16,6 +21,13 @@ function safeReturnTo(value: string | string[] | undefined): string {
 export default async function LoginPage({ searchParams }: { searchParams: Promise<{ return_to?: string | string[] }> }) {
   const params = await searchParams;
   const continueTo = safeReturnTo(params.return_to);
+  const requestHost = (await headers()).get("host")?.split(":", 1)[0]?.trim().toLowerCase();
+  if (requestHost === TAILNET_PORTAL_HOST) {
+    const canonicalLogin = new URL("/login", CANONICAL_PORTAL_ORIGIN);
+    if (continueTo !== "/") canonicalLogin.searchParams.set("return_to", continueTo);
+    redirect(canonicalLogin.toString());
+  }
+
   return (
     <main className="login-page">
       <Link href="/" className="login-back"><ArrowLeft size={16} /> Voltar ao início</Link>
