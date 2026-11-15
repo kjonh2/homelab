@@ -30,9 +30,9 @@ O verificador valida a allowlist ativa de cada servidor, não a lista completa d
 
 ## Estado da gateway
 
-O perfil local continua disponível para inspeção, mas o handshake da gateway ainda não foi validado. Em 2026-11-14, com Docker MCP CLI `v0.44.3` e `McpManagementService` em execução, `docker pass ls` listou os identificadores locais sem ler valores. Em contraste, `docker mcp secret ls` devolveu `deadline_exceeded` ao chamar `ResolverService/GetSecrets`. Isso confirma que os identificadores existem no armazenamento local; a falha está no caminho do resolver MCP, mas a causa interna ainda não foi identificada. O serviço já foi iniciado com UAC e o timeout persiste. Um `docker mcp gateway run --profile drisa --dry-run --verbose` anterior também ficou à espera do resolver. Não exportes os segredos para ficheiros como tentativa de contorno.
+Diagnóstico histórico em 2026-11-14: com Docker MCP CLI `v0.44.3` e `McpManagementService` em execução, `docker pass ls` listou os identificadores locais sem ler valores. Em contraste, `docker mcp secret ls` devolveu `deadline_exceeded` ao chamar `ResolverService/GetSecrets`. O serviço já foi iniciado com UAC e o timeout persistiu. Um `docker mcp gateway run --profile drisa --dry-run --verbose` anterior também ficou à espera do resolver. Não exportes os segredos para ficheiros como tentativa de contorno.
 
-As skills Docker MCP e gestão de contexto estão instaladas em `%LOCALAPPDATA%\hermes\skills\` e `%USERPROFILE%\.hermes\skills\`; os ficheiros instalados têm o mesmo SHA-256 que as versões versionadas em `deploy/windows/skills/`. O `mcp_servers.drisa-docker` está ativo em `%LOCALAPPDATA%\hermes\config.yaml`, lança `docker mcp gateway run --profile drisa`, e limita a sessão à allowlist acima. O handshake real continua por validar.
+As skills Docker MCP e gestão de contexto estão instaladas em `%LOCALAPPDATA%\hermes\skills\` e `%USERPROFILE%\.hermes\skills\`; os ficheiros instalados têm o mesmo SHA-256 que as versões versionadas em `deploy/windows/skills/`. A configuração Hermes e o handshake são revalidados na secção abaixo.
 
 Nova verificação em 2026-11-14: Docker MCP CLI `v0.44.3`, Docker client/server `29.9.3`, perfil `drisa` com três servidores e 36 ferramentas permitidas. `McpManagementService` está `Running` como `LocalSystem`; reiniciá-lo não corrigiu o timeout de `docker mcp secret ls`, que continua a devolver `deadline_exceeded` em `ResolverService/GetSecrets`. Os logs Hermes mostram a mesma falha ao iniciar `drisa-docker`. Não exportes nem copies os segredos para contornar o resolver. Um reinício completo do Docker Desktop continua por aprovar.
 
@@ -51,6 +51,15 @@ Nova verificação às 05:51 Europe/Paris em 2026-11-15: `docker info --format '
 Leitura direcionada da nota Obsidian `Session Memory 2026-06-30.md`: a lista de sete servidores é histórica; outra secção chama o perfil de quatro servidores e aponta o Proxmox para `https://pve.homelab.cloud:8006`. A resolução DNS atual de `pve.homelab.cloud` neste portátil não devolveu um registo A/AAAA. As secções consultadas não fornecem um endpoint atual nem um conjunto atual de permissões; as linhas com credenciais foram omitidas durante a inspeção. Não reconstruas nem atives `homelabagent` até confirmar a rede e a configuração contemporâneas.
 
 O upstream tem uma [issue aberta no `docker/mcp-gateway`](https://github.com/docker/mcp-gateway/issues/551) que também relata `deadline_exceeded` em `ResolverService/GetSecrets` persistente após reinícios do Desktop. O relato é de macOS e Docker MCP `v0.43.3`, portanto é apenas um sintoma semelhante, não uma causa confirmada para este Windows com `v0.44.3`. Não foi aplicado nenhum contorno que copie ou contorne os segredos.
+
+### Hermes e handshake do perfil Drisa — 2026-11-15
+
+- A configuração efetiva do Hermes Desktop é `%LOCALAPPDATA%\hermes\config.yaml`. `hermes mcp list` mostra `drisa-docker` habilitado com 36 ferramentas selecionadas; a configuração usa `docker mcp gateway run --profile drisa`. O Docker MCP verifier confirma que essas 36 ferramentas são as 23 operações GitHub de leitura, nove operações Obsidian de pesquisa/leitura e quatro operações YouTube de transcrição/metadados.
+- O handshake não está funcional: `hermes mcp test drisa-docker` falhou após 185,7 s com timeout de `connect_timeout: 180`. Reduzi o timeout persistido para 30 s; a tentativa seguinte falhou em 35,8 s com `connect_timeout: 30`. O CLI continua a listar a conexão como configurada, o que não prova que as ferramentas estão carregadas.
+- Uma inicialização temporária de `docker mcp gateway run --profile drisa` não devolveu resposta MCP `tools/list` no limite de 25 s. `docker mcp tools list` apenas mostra oito ferramentas internas de controlo do gateway, sem as ferramentas GitHub/Obsidian/YouTube do perfil.
+- Não li valores de segredos, não exportei segredos e não reiniciei o Docker Desktop nesta revalidação. O resolver `ResolverService/GetSecrets` continua a ser o principal sintoma conhecido, mas não foi possível confirmar que explica sozinho o timeout do handshake.
+
+Para uma instalação nova, a ligação Hermes stdio pode ser criada com `hermes mcp add drisa-docker --command docker --connect-timeout 30 --args mcp gateway run --profile drisa`. Valida o perfil com `python deploy/windows/inspect_drisa_mcp_profile.py drisa`, depois usa `hermes mcp test drisa-docker` para testar a ligação live; não trates o contador de ferramentas de `hermes mcp list` como confirmação do handshake.
 
 ## Segurança
 
