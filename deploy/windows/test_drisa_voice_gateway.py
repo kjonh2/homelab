@@ -14,6 +14,7 @@ os.environ["DRISA_HOME"] = _TEST_ROOT.name
 os.environ["DRISA_VAULT_PATH"] = str(Path(_TEST_ROOT.name) / "vault")
 
 import drisa_voice_gateway as gateway
+import drisa_model_loader as model_loader
 from drisa_voice_gateway import MAX_AUDIO_BYTES, decode_audio_payload
 
 
@@ -91,6 +92,50 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(get.call_args_list[0].kwargs["params"], {"source": "cache"})
         self.assertEqual(result["selected"], kokoro)
         self.assertEqual(result["models"], [{"id": kokoro, "loaded": True}])
+
+
+class VpsModelLoaderTests(unittest.TestCase):
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload = payload
+
+        @staticmethod
+        def raise_for_status():
+            return None
+
+        def json(self):
+            return self.payload
+
+    def test_already_loaded_vps_model_skips_load(self):
+        import requests
+
+        with patch.object(requests, "get", return_value=self.FakeResponse({
+            "data": [{"id": "lfm3-text", "loaded": True}],
+        })) as get, patch.object(requests, "post") as post:
+            model_loader.ensure_vps_llm_model_loaded("lfm3-text", "key", models_url="https://vps.test/models")
+
+        get.assert_called_once()
+        post.assert_not_called()
+
+    def test_unloaded_vps_model_is_loaded_and_polled_until_ready(self):
+        import requests
+
+        with patch.object(requests, "get", side_effect=[
+            self.FakeResponse({"data": [{"id": "lfm3-text", "loaded": False}]}),
+            self.FakeResponse({"data": [{"id": "lfm3-text", "status": {"value": "loading"}}]}),
+            self.FakeResponse({"data": [{"id": "lfm3-text", "status": {"value": "loaded"}}]}),
+        ]) as get, patch.object(requests, "post", return_value=self.FakeResponse({"success": True})) as post, \
+                patch.object(model_loader.time, "sleep") as sleep:
+            model_loader.ensure_vps_llm_model_loaded(
+                "lfm3-text", "test-key", models_url="https://vps.test/models", poll_interval=1,
+            )
+
+        post.assert_called_once_with(
+            "https://vps.test/models/load", json={"model": "lfm3-text"},
+            headers={"Authorization": "Bearer test-key"}, timeout=(5, 260),
+        )
+        self.assertEqual(get.call_count, 3)
+        sleep.assert_called_once()
 
 
 class PcNativeModelManagementTests(unittest.TestCase):
@@ -215,19 +260,14 @@ class PcNativeModelManagementTests(unittest.TestCase):
             with (
                 patch.object(gateway, "BASE", Path(directory)),
                 patch.object(gateway, "load_config", return_value={"llm_host": "vps", "llm_model": "lfm3-text"}),
-                patch.object(requests, "get", side_effect=[CatalogResponse(False), CatalogResponse(False), CatalogResponse(True)]) as get,
-                patch.object(requests, "post", return_value=LoadResponse()) as post,
+                patch.object(requests, "get", return_value=CatalogResponse(False)),
+                patch.object(gateway, "ensure_vps_llm_model_loaded") as ensure_loaded,
                 patch.object(gateway, "_save_model_selection") as save_selection,
-                patch.object(gateway.time, "sleep") as sleep,
             ):
                 result = gateway.load_model_for_app("vps", "llm", "lfm3-text")
 
         self.assertEqual(result, "Modelo carregado na VPS.")
-        self.assertEqual(post.call_args.args[0], gateway._VPS_MODELS_URL + "/load")
-        self.assertEqual(post.call_args.kwargs["json"], {"model": "lfm3-text"})
-        self.assertEqual(post.call_args.kwargs["headers"]["Authorization"], "Bearer test-vps-key")
-        self.assertEqual(get.call_count, 3)
-        sleep.assert_called_once()
+        ensure_loaded.assert_called_once_with("lfm3-text", "test-vps-key", models_url=gateway._VPS_MODELS_URL)
         save_selection.assert_called_once_with("vps", "llm", "lfm3-text")
 
 
@@ -427,13 +467,18 @@ class AudioPayloadTests(unittest.TestCase):
         with (
             patch.object(gateway, "_unsloth_cfg", return_value={
                 "llm_model": "lfm3-uncensored",
+                "llm_host": "vps",
                 "llm_url": "https://vps.example/v1",
                 "llm_key": "test-key",
             }),
+            patch.object(gateway, "ensure_vps_llm_model_loaded") as ensure_loaded,
             patch.object(requests, "post", return_value=FakeResponse()) as post,
         ):
             self.assertEqual(gateway.llm_reply(transcript), reply)
 
+        ensure_loaded.assert_called_once_with(
+            "lfm3-uncensored", "test-key", models_url=gateway._VPS_MODELS_URL,
+        )
         args, kwargs = post.call_args
         self.assertEqual(args[0], "https://vps.example/v1/chat/completions")
         self.assertEqual(kwargs["json"]["model"], "lfm3-uncensored")

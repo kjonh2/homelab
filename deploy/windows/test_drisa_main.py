@@ -156,6 +156,7 @@ class DrisaFallbackTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir, patch("shutil.which", return_value=None), \
                 patch("urllib.request.urlopen", return_value=FakeResponse()) as request, \
+                patch("drisa_main.ensure_vps_llm_model_loaded") as ensure_vps, \
                 patch.dict(os.environ, {
                     "DRISA_LLM_HOST": "vps",
                     "DRISA_LLM_URL": "https://vps.example/v1",
@@ -168,6 +169,7 @@ class DrisaFallbackTests(unittest.TestCase):
 
         self.assertEqual(response, "Estou a ouvir, Kiko.")
         self.assertEqual(request.call_count, 1)
+        ensure_vps.assert_called_once_with("test-model", "test-vps-key", models_url="https://vps-4e5174e4.tail2931da.ts.net:8445/models")
         self.assertTrue(request.call_args.args[0].full_url.startswith("https://vps.example/v1/"))
 
     def test_selected_vps_falls_back_to_pc_after_empty_vps_retries(self):
@@ -194,6 +196,7 @@ class DrisaFallbackTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir, patch("shutil.which", return_value=None), \
                 patch("urllib.request.urlopen", side_effect=response_by_host) as request, \
+                patch("drisa_main.ensure_vps_llm_model_loaded", side_effect=RuntimeError("VPS model is unloaded")) as ensure_vps, \
                 patch("drisa_main.ensure_local_llm_model_loaded") as ensure_local, \
                 patch.dict(os.environ, {
                     "DRISA_LLM_HOST": "vps",
@@ -207,7 +210,8 @@ class DrisaFallbackTests(unittest.TestCase):
             response = assistant.process_command("O que podes fazer?", "pt")
 
         self.assertEqual(response, "Posso ajudar com isso.")
-        self.assertEqual(request.call_count, 3)
+        self.assertEqual(request.call_count, 1)
+        ensure_vps.assert_called_once()
         self.assertTrue(request.call_args.args[0].full_url.startswith("http://127.0.0.1:8888/v1/"))
         self.assertEqual(json.loads(request.call_args.args[0].data)["model"], "local-test-model")
         ensure_local.assert_called_once_with("http://127.0.0.1:8888/v1", "", "local-test-model")

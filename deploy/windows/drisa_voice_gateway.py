@@ -29,6 +29,7 @@ from pathlib import Path
 import websockets
 from drisa_speech_text import is_utterance_echo, prepare_spoken_text
 from drisa_memory import chat as memory_chat
+from drisa_model_loader import VPS_MODELS_URL, ensure_vps_llm_model_loaded
 
 BASE = Path(os.environ.get("DRISA_HOME", str(Path.home() / "workspace" / "drisa")))
 WHISPER_EXE = Path(os.environ.get("DRISA_WHISPER_EXE", r"C:\Whisper.Cpp\whisper-cli.exe"))
@@ -317,7 +318,7 @@ _PC_AUDIO_CPP_MODELS = {
     "parakeet_tdt_q8_0": "audio-cpp/audio.cpp-gguf/Parakeet-TDT-0.6B-v3-GGUF",
 }
 _VPS_LLM_URL = "https://vps-4e5174e4.tail2931da.ts.net:8445/v1"
-_VPS_MODELS_URL = "https://vps-4e5174e4.tail2931da.ts.net:8445/models"
+_VPS_MODELS_URL = VPS_MODELS_URL
 
 
 def _is_image_generation_model(item: dict) -> bool:
@@ -673,25 +674,9 @@ def load_model_for_app(host: str, category: str, model_id: str) -> str:
         if category == "tts":
             return _load_pc_tts_model(requests, model_id)
     if host == "vps" and category == "llm":
-        import requests
         key_path = BASE / "iku_lfm3.key"
         key = key_path.read_text(encoding="utf-8").strip()
-        response = requests.post(_VPS_MODELS_URL + "/load", json={"model": model_id},
-                                 headers={"Authorization": f"Bearer {key}"}, timeout=(5, 260))
-        response.raise_for_status()
-        result = response.json()
-        if result.get("success") is False:
-            raise RuntimeError("A VPS recusou o carregamento do modelo.")
-        deadline = time.monotonic() + 240
-        while True:
-            loaded_model = next((item for item in _vps_model_catalog("llm")["models"]
-                                 if item["id"] == model_id), None)
-            if loaded_model and loaded_model["loaded"]:
-                break
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise RuntimeError(f"O modelo {model_id} não ficou pronto na VPS dentro do prazo.")
-            time.sleep(min(2, remaining))
+        ensure_vps_llm_model_loaded(model_id, key, models_url=_VPS_MODELS_URL)
         _save_model_selection(host, category, model_id)
         return "Modelo carregado na VPS."
     if host in ("homelab", "vps") and category in ("stt", "tts"):
@@ -891,14 +876,22 @@ def llm_reply(text: str) -> str:
         system_prompt = f"És a Drisa, assistente pessoal de {owner}. Responde em português de Portugal com uma resposta final, natural e pronta a ser dita em voz alta pelo Kokoro. Limita-te a duas frases curtas e, sempre que possível, a 40 palavras. Não mostres raciocínio, análise, passos internos, etiquetas ou markdown. Se não souberes, dizes."
         primary_url, primary_model, primary_key = cfg["llm_url"], cfg["llm_model"], cfg.get("llm_key", "")
         reply = None
-        try:
-            reply = memory_chat(
-                text, system_prompt=system_prompt, base_url=primary_url, key=primary_key,
-                model=primary_model, max_tokens=120, temperature=0.7,
-                spoken_cleaner=prepare_spoken_text,
-            )
-        except Exception as e:
-            print(f"[llm] memória PostgreSQL indisponível; vou tentar a API diretamente: {e}")
+        primary_error = None
+        if cfg.get("llm_host") == "vps":
+            try:
+                ensure_vps_llm_model_loaded(primary_model, primary_key, models_url=_VPS_MODELS_URL)
+            except Exception as e:
+                primary_error = e
+                print(f"[llm] modelo LFM3 da VPS indisponível; a tentar fallback: {e}")
+        if primary_error is None:
+            try:
+                reply = memory_chat(
+                    text, system_prompt=system_prompt, base_url=primary_url, key=primary_key,
+                    model=primary_model, max_tokens=120, temperature=0.7,
+                    spoken_cleaner=prepare_spoken_text,
+                )
+            except Exception as e:
+                print(f"[llm] memória PostgreSQL indisponível; vou tentar a API diretamente: {e}")
 
         def direct_reply(base_url: str, model: str, key: str) -> str:
             headers = {"Content-Type": "application/json"}
@@ -913,6 +906,8 @@ def llm_reply(text: str) -> str:
 
         if not reply:
             try:
+                if primary_error is not None:
+                    raise primary_error
                 reply = direct_reply(primary_url, primary_model, primary_key)
                 if reply:
                     print("[llm] resposta gerada diretamente pela API principal")

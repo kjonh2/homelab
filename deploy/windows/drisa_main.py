@@ -25,6 +25,7 @@ from typing import Optional, Dict, Any
 # Add current directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from drisa_speech_text import is_utterance_echo, prepare_spoken_text
+from drisa_model_loader import VPS_MODELS_URL, ensure_vps_llm_model_loaded
 from drisa_gateway_client import publish_completed_turn
 from drisa_log_rotation import create_rotating_file_handler
 
@@ -765,6 +766,12 @@ class DrisaAssistant:
                             ensure_local_llm_model_loaded(base_url, key, provider_model)
                         except Exception as e:
                             logger.warning("Local LLM fallback could not be loaded (%s)", type(e).__name__)
+                            continue
+                    if provider_name == "VPS":
+                        try:
+                            ensure_vps_llm_model_loaded(provider_model, key, models_url=VPS_MODELS_URL)
+                        except Exception as e:
+                            logger.warning("VPS LLM model could not be loaded (%s)", type(e).__name__)
                             continue
 
                     for output_budget in (max_tokens, min(max_tokens * 2, 400)):
