@@ -165,6 +165,17 @@ _HOMELAB_MODEL_PACKAGES = {
     "parakeet": {"package_id": "parakeet_tdt_q8_0", "task": "asr"},
     "kokoro": {"package_id": "kokoro_82m_q8_0", "task": "tts"},
 }
+_PC_AUDIO_CPP_MODELS = {
+    "audio-cpp/audio.cpp-gguf/moss-transcribe-diarize-gguf": "audio-cpp/audio.cpp-gguf/MOSS-Transcribe-Diarize-GGUF",
+    "moss": "audio-cpp/audio.cpp-gguf/MOSS-Transcribe-Diarize-GGUF",
+    "moss-transcribe-diarize-gguf": "audio-cpp/audio.cpp-gguf/MOSS-Transcribe-Diarize-GGUF",
+    "moss_transcribe_diarize_q4_k": "audio-cpp/audio.cpp-gguf/MOSS-Transcribe-Diarize-GGUF",
+    "audio-cpp/audio.cpp-gguf/parakeet-tdt-0.6b-v3-gguf": "audio-cpp/audio.cpp-gguf/Parakeet-TDT-0.6B-v3-GGUF",
+    "audiocpp-parakeet-tdt-0.6b-v3": "audio-cpp/audio.cpp-gguf/Parakeet-TDT-0.6B-v3-GGUF",
+    "parakeet": "audio-cpp/audio.cpp-gguf/Parakeet-TDT-0.6B-v3-GGUF",
+    "parakeet-tdt-0.6b-v3-gguf": "audio-cpp/audio.cpp-gguf/Parakeet-TDT-0.6B-v3-GGUF",
+    "parakeet_tdt_q8_0": "audio-cpp/audio.cpp-gguf/Parakeet-TDT-0.6B-v3-GGUF",
+}
 _VPS_LLM_URL = "https://vps-4e5174e4.tail2931da.ts.net:8445/v1"
 _VPS_MODELS_URL = "https://vps-4e5174e4.tail2931da.ts.net:8445/models"
 
@@ -253,6 +264,41 @@ def _pc_audio_cpp_status(requests=None) -> dict:
     if not isinstance(state, dict):
         raise RuntimeError("O audio.cpp do Unsloth não devolveu o estado STT.")
     return state
+
+
+def _pc_audio_cpp_model_id(model_id: str) -> str | None:
+    identity = str(model_id or "").strip().lower()
+    return _PC_AUDIO_CPP_MODELS.get(identity)
+
+
+def _ensure_pc_audio_cpp_model(requests, model_id: str) -> None:
+    state = _pc_audio_cpp_status(requests)
+    if (state.get("loaded_model") or state.get("loaded_variant")) == model_id and not state.get("loading"):
+        return
+    if model_id not in state.get("downloaded_models", []):
+        raise RuntimeError(f"O modelo {model_id} não está descarregado no portátil.")
+    cfg = _unsloth_cfg()
+    root = cfg["base_url"].removesuffix("/v1")
+    response = requests.post(
+        f"{root}/api/inference/audio/stt/load",
+        json={"model": model_id, "engine": "audiocpp", "device": "auto"},
+        timeout=(5, 260),
+    )
+    response.raise_for_status()
+    result = response.json()
+    if result.get("success") is False or result.get("error"):
+        raise RuntimeError(str(result.get("error") or f"Não foi possível carregar {model_id} no portátil."))
+    deadline = time.monotonic() + 240
+    while True:
+        state = _pc_audio_cpp_status(requests)
+        if (state.get("loaded_model") or state.get("loaded_variant")) == model_id and not state.get("loading"):
+            return
+        if state.get("error"):
+            raise RuntimeError(str(state["error"]))
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError(f"O modelo {model_id} não ficou pronto no portátil dentro do prazo.")
+        time.sleep(min(2, remaining))
 
 
 def _vps_model_catalog(category: str) -> dict:
@@ -389,30 +435,7 @@ def load_model_for_app(host: str, category: str, model_id: str) -> str:
         raise ValueError("Esse modelo não aparece no catálogo deste host.")
     if host == "pc" and category == "stt":
         import requests
-        cfg = _unsloth_cfg()
-        root = cfg["base_url"].removesuffix("/v1")
-        state = _pc_audio_cpp_status(requests)
-        if (state.get("loaded_model") or state.get("loaded_variant")) != model_id:
-            response = requests.post(
-                f"{root}/api/inference/audio/stt/load",
-                json={"model": model_id, "engine": "audiocpp", "device": "auto"},
-                timeout=(5, 260),
-            )
-            response.raise_for_status()
-            result = response.json()
-            if result.get("success") is False or result.get("error"):
-                raise RuntimeError(str(result.get("error") or f"Não foi possível carregar {model_id} no portátil."))
-            deadline = time.monotonic() + 240
-            while True:
-                state = _pc_audio_cpp_status(requests)
-                if (state.get("loaded_model") or state.get("loaded_variant")) == model_id and not state.get("loading"):
-                    break
-                if state.get("error"):
-                    raise RuntimeError(str(state["error"]))
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise RuntimeError(f"O modelo {model_id} não ficou pronto no portátil dentro do prazo.")
-                time.sleep(min(2, remaining))
+        _ensure_pc_audio_cpp_model(requests, model_id)
         _save_model_selection(host, category, model_id)
         return "Modelo carregado no portátil."
     if host == "pc":
@@ -541,11 +564,10 @@ def unsloth_transcribe(wav_path: Path, model: str | None = None) -> str:
             is_homelab = bool(cfg["audio_url"]) and base_url == cfg["audio_url"]
             if is_homelab:
                 _ensure_homelab_model(requests, base_url, headers, data["model"])
-            model_identity = data["model"].lower()
-            is_local_audio_cpp = not is_homelab and any(
-                marker in model_identity for marker in ("moss-transcribe-diarize", "moss_transcribe_diarize", "parakeet-tdt", "parakeet_tdt")
-            )
-            if is_local_audio_cpp:
+            pc_model_id = None if is_homelab else _pc_audio_cpp_model_id(data["model"])
+            if pc_model_id:
+                data["model"] = pc_model_id
+                _ensure_pc_audio_cpp_model(requests, pc_model_id)
                 # Unsloth's audio.cpp sidecar exposes its own route; its /v1
                 # OpenAI transcription route does not serve these loaded models.
                 endpoint = f"{base_url.removesuffix('/v1')}/api/inference/audio/transcriptions"

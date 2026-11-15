@@ -226,15 +226,23 @@ class PcAudioCppRouteTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="drisa-pc-audio-cpp-test-") as directory:
             wav = Path(directory) / "input.wav"
             wav.write_bytes(b"RIFF-test")
-            for model in (cfg["stt_model"], cfg["fallback_stt_model"]):
+            cases = (
+                (cfg["stt_model"], cfg["stt_model"]),
+                (cfg["fallback_stt_model"], cfg["fallback_stt_model"]),
+                ("parakeet", cfg["fallback_stt_model"]),
+                ("moss", cfg["stt_model"]),
+            )
+            for model, expected_model in cases:
                 with (
                     patch.object(gateway, "_unsloth_cfg", return_value=cfg),
                     patch.object(requests, "post", return_value=FakeResponse()) as post,
+                    patch.object(gateway, "_ensure_pc_audio_cpp_model") as ensure_model,
                 ):
                     self.assertEqual(gateway.unsloth_transcribe(wav, model), "Texto reconhecido.")
                 self.assertEqual(post.call_args.args[0], "http://127.0.0.1:8888/api/inference/audio/transcriptions")
-                self.assertEqual(post.call_args.kwargs["data"], {"model": model, "device": "auto"})
+                self.assertEqual(post.call_args.kwargs["data"], {"model": expected_model, "device": "auto"})
                 self.assertEqual(post.call_args.kwargs["headers"], {"Authorization": "Bearer pc-key"})
+                ensure_model.assert_called_once_with(requests, expected_model)
 
 
 class AudioPayloadTests(unittest.TestCase):
