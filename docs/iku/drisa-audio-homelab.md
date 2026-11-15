@@ -12,6 +12,8 @@ Last checked: 2026-11-15. Redmi is online on Tailscale, but `adb devices` is emp
 - The audio server enables dynamic loading only for installed model IDs. Its WebUI stays disabled. NetworkPolicy restricts access to the cluster path used by the private SSH forwards.
 - Kokoro needs the eSpeak-ng runtime library and voice data. A non-root init container extracts Ubuntu's signed `libespeak-ng1`, `libpcaudio0`, `libsonic0`, and `espeak-ng-data` packages into the service PVC. The model server reads them from that PVC.
 
+LFM3 chat requests sent to Unsloth Studio set `enable_thinking: false`. The Studio OpenAI-compatible API otherwise returns LFM's internal generation in `reasoning_content` while `message.content` stays empty, which leaves Drisa with no final text to speak. A local synthetic request verified that disabling thinking returns a final answer; after deploying the fix, a live listener turn fell back from the timed-out VPS to the laptop model and the gateway returned Kokoro WAV. This verifies the fallback path but not that the Redmi received playback; confirm with a deliberate utterance in the app.
+
 ## Laptop Gaming mode
 
 The watchdog reads `drisa_mode.txt`. In Gaming mode it stops the laptop's local model server and the Drisa 3D world, keeps the authenticated gateway and microphone listener available, and routes MOSS/Kokoro requests through the VPS tunnel. If VPS audio inference fails, transcription and speech use the homelab service through its loopback tunnel; LFM remains VPS-only while the laptop server is stopped. Returning to normal mode restores the normal voice listener and leaves the local model server alone.
