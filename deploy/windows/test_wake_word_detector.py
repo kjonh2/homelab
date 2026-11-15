@@ -21,6 +21,7 @@ class WakeWordDetectorTests(unittest.TestCase):
     def test_rejects_unrelated_speech_and_late_mentions(self):
         self.assertFalse(WakeWordDetector.contains_wake_word("Teste de microfone"))
         self.assertFalse(WakeWordDetector.contains_wake_word("Hoje vou falar com a Drisa"))
+        self.assertFalse(WakeWordDetector.contains_wake_word("Acho que a Drisa está ocupada"))
 
     def test_unavailable_model_never_opens_the_remote_stt_gate(self):
         detector = WakeWordDetector()

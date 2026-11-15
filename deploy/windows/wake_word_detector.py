@@ -56,7 +56,7 @@ class WakeWordDetector:
         normalized = unicodedata.normalize("NFKD", str(text).casefold())
         normalized = "".join(char for char in normalized if not unicodedata.combining(char))
         words = re.findall(r"[a-z0-9]+", normalized)
-        return any(word in _WAKE_ALIASES for word in words)
+        return any(word in _WAKE_ALIASES for word in words[:2])
 
     def process_audio(self, audio_chunk):
         """Return True only when a recent segment starts with the Drisa wake word."""

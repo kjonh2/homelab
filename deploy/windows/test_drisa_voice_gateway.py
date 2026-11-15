@@ -628,6 +628,45 @@ class AudioPayloadTests(unittest.TestCase):
             self.assertEqual(gateway.transcribe(Path("unused.wav")), "Texto do portátil.")
         self.assertEqual(transcribe.call_args_list[1].kwargs, {"host": "pc", "base_url": "http://127.0.0.1:8888/v1"})
 
+    def test_vps_audio_lock_contention_uses_independent_pc_fallback(self):
+        import requests
+
+        class FakeResponse:
+            @staticmethod
+            def raise_for_status():
+                return None
+
+            @staticmethod
+            def json():
+                return {"text": "Resposta do fallback local."}
+
+        cfg = {
+            "base_url": "http://127.0.0.1:8888/v1", "key": "pc-key",
+            "audio_url": "https://vps.example/v1", "audio_key": "",
+            "stt_url": "https://vps.example/v1", "stt_key": "",
+            "stt_host": "vps", "stt_model": "moss", "fallback_stt_model": "parakeet",
+            "fallback_stt_host": "pc", "fallback_stt_url": "http://127.0.0.1:8888/v1",
+        }
+        vps_lock = gateway._AUDIO_REQUEST_LOCKS["vps"]
+        self.assertTrue(vps_lock.acquire(blocking=False))
+        try:
+            with tempfile.TemporaryDirectory(prefix="drisa-vps-busy-fallback-") as directory:
+                wav = Path(directory) / "input.wav"
+                wav.write_bytes(b"RIFF-test")
+                with (
+                    patch.object(gateway, "load_config", return_value={"stt_engine": "api", "fallback_local_stt": False}),
+                    patch.object(gateway, "_unsloth_cfg", return_value=cfg),
+                    patch.object(gateway, "_ensure_pc_audio_cpp_model") as ensure_model,
+                    patch.object(requests, "post", return_value=FakeResponse()) as post,
+                ):
+                    self.assertEqual(gateway.transcribe(wav), "Resposta do fallback local.")
+        finally:
+            vps_lock.release()
+
+        ensure_model.assert_called_once_with(requests, "audio-cpp/audio.cpp-gguf/Parakeet-TDT-0.6B-v3-GGUF")
+        self.assertEqual(post.call_count, 1)
+        self.assertEqual(post.call_args.args[0], "http://127.0.0.1:8888/api/inference/audio/transcriptions")
+
     def test_unsloth_keeps_full_stt_package_ids(self):
         moss = "audio-cpp/audio.cpp-gguf/MOSS-Transcribe-Diarize-GGUF"
         parakeet = "audio-cpp/audio.cpp-gguf/Parakeet-TDT-0.6B-v3-GGUF"

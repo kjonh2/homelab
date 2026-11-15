@@ -14,6 +14,7 @@ Config: gateway_config.json (port, allowlist, policies por dispositivo)
 import asyncio
 import base64
 import binascii
+from contextlib import contextmanager
 import json
 import os
 import secrets
@@ -281,13 +282,29 @@ def _unsloth_cfg():
 
 
 _MODEL_CONFIG_LOCK = threading.Lock()
-_AUDIO_REQUEST_LOCK = threading.RLock()
+_AUDIO_STATE_LOCK = threading.Lock()
+_AUDIO_REQUEST_LOCKS = {host: threading.Lock() for host in ("pc", "homelab", "vps")}
+_AUDIO_LOCK_WAIT_SECONDS = 0.05
 _HOMELAB_ACTIVE_MODEL: str | None = None
 _HOMELAB_MODEL_PACKAGES = {
     "moss": {"package_id": "moss_transcribe_diarize_q4_k", "task": "asr"},
     "parakeet": {"package_id": "parakeet_tdt_q8_0", "task": "asr"},
     "kokoro": {"package_id": "kokoro_82m_q8_0", "task": "tts"},
 }
+
+
+@contextmanager
+def _audio_request(host: str):
+    """Serialize one audio backend without blocking fallback on another host."""
+    lock = _AUDIO_REQUEST_LOCKS.get(host)
+    if lock is None:
+        raise ValueError(f"Host de áudio inválido: {host}")
+    if not lock.acquire(timeout=_AUDIO_LOCK_WAIT_SECONDS):
+        raise AudioBackendBusyError(f"O serviço de áudio {host} já está a processar outro pedido.")
+    try:
+        yield
+    finally:
+        lock.release()
 _PC_AUDIO_CPP_MODELS = {
     "audio-cpp/audio.cpp-gguf/moss-transcribe-diarize-gguf": "audio-cpp/audio.cpp-gguf/MOSS-Transcribe-Diarize-GGUF",
     "moss": "audio-cpp/audio.cpp-gguf/MOSS-Transcribe-Diarize-GGUF",
@@ -544,7 +561,7 @@ def _audio_service_model_catalog(host: str, category: str) -> dict:
     entry_by_id = {str(item.get("id", "")): item for item in entries if isinstance(item, dict)}
     available = set(entry_by_id)
     configured = sorted(allowed[category] & available)
-    with _AUDIO_REQUEST_LOCK:
+    with _AUDIO_STATE_LOCK:
         loaded_model = _HOMELAB_ACTIVE_MODEL
     models = [{"id": model_id, "loaded": (
         bool(entry_by_id[model_id]["loaded"]) if isinstance(entry_by_id[model_id].get("loaded"), bool)
@@ -687,7 +704,7 @@ def load_model_for_app(host: str, category: str, model_id: str) -> str:
         headers = {"Content-Type": "application/json"}
         if cfg["audio_key"]:
             headers["Authorization"] = f"Bearer {cfg['audio_key']}"
-        with _AUDIO_REQUEST_LOCK:
+        with _audio_request(host):
             response = requests.post(f"{base_url}/models/load",
                                      json={"id": model_id, **package},
                                      headers=headers, timeout=(5, 260))
@@ -696,8 +713,9 @@ def load_model_for_app(host: str, category: str, model_id: str) -> str:
             if result.get("success") is False or result.get("error"):
                 raise RuntimeError(str(result.get("error") or "O servidor de áudio recusou o modelo."))
             _save_model_selection(host, category, model_id)
-            global _HOMELAB_ACTIVE_MODEL
-            _HOMELAB_ACTIVE_MODEL = model_id
+            with _AUDIO_STATE_LOCK:
+                global _HOMELAB_ACTIVE_MODEL
+                _HOMELAB_ACTIVE_MODEL = model_id
         return f"Modelo {model_id} carregado em {host}."
     raise ValueError("Esta categoria não pode ser carregada nesse host.")
 
@@ -780,8 +798,8 @@ def unsloth_transcribe(
         files = {"file": (wav_path.name, wav_path.read_bytes(), "audio/wav")}
         data = {"model": _normalize_audio_model(model or cfg["stt_model"], model or cfg["stt_model"])}
         headers = {"Authorization": f"Bearer {key}"} if key else {}
-        with _AUDIO_REQUEST_LOCK:
-            is_audio_service = host in ("homelab", "vps")
+        is_audio_service = host in ("homelab", "vps")
+        with _audio_request(host):
             if is_audio_service:
                 _ensure_homelab_model(requests, base_url, headers, data["model"])
             pc_model_id = _pc_audio_cpp_model_id(data["model"]) if host == "pc" else None
@@ -799,10 +817,13 @@ def unsloth_transcribe(
                               timeout=(5, inference_timeout))
             r.raise_for_status()
             if is_audio_service:
-                global _HOMELAB_ACTIVE_MODEL
-                _HOMELAB_ACTIVE_MODEL = data["model"]
+                with _AUDIO_STATE_LOCK:
+                    global _HOMELAB_ACTIVE_MODEL
+                    _HOMELAB_ACTIVE_MODEL = data["model"]
         payload = r.json()
         return (payload.get("text") or "").strip()
+    except AudioBackendBusyError:
+        raise
     except Exception as e:
         if is_audio_service and "requests" in locals():
             response = getattr(e, "response", None)
@@ -987,7 +1008,7 @@ def tts_kokoro(text: str) -> bytes | None:
             headers = {"Content-Type": "application/json"}
             if key:
                 headers["Authorization"] = f"Bearer {key}"
-            with _AUDIO_REQUEST_LOCK:
+            with _audio_request(host):
                 if remote_audio:
                     _ensure_homelab_model(requests, url, headers, model)
                 else:
@@ -995,8 +1016,9 @@ def tts_kokoro(text: str) -> bytes | None:
                 response = requests.post(f"{url}/audio/speech", json=payload, headers=headers, timeout=(5, 120))
                 response.raise_for_status()
                 if remote_audio:
-                    global _HOMELAB_ACTIVE_MODEL
-                    _HOMELAB_ACTIVE_MODEL = model
+                    with _AUDIO_STATE_LOCK:
+                        global _HOMELAB_ACTIVE_MODEL
+                        _HOMELAB_ACTIVE_MODEL = model
             return response.content
 
         try:
