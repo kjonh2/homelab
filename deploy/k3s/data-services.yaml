@@ -166,12 +166,14 @@ spec:
               port: http
             initialDelaySeconds: 30
             periodSeconds: 15
+            timeoutSeconds: 5
           livenessProbe:
             httpGet:
               path: /status.php
               port: http
             initialDelaySeconds: 300
             periodSeconds: 30
+            timeoutSeconds: 5
           volumeMounts:
             - name: config
               mountPath: /var/www/html/config
