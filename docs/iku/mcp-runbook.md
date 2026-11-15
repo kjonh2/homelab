@@ -48,6 +48,8 @@ Revalidação às 05:18 Europe/Paris em 2026-11-15: `docker mcp profile list`, `
 
 Nova verificação às 05:51 Europe/Paris em 2026-11-15: `docker info --format '{{.ServerVersion}}'` respondeu `29.9.3`, mas `docker ps` continuou sem resposta por mais de 25 segundos e foi interrompido no cliente. A listagem de perfis e de ferramentas MCP continua responsiva; `homelabagent` continua ausente. A nota histórica do Obsidian descreve sete servidores (Proxmox, Notion, GitHub, SQLite, Node.js sandbox, Next.js devtools e Docker Hub), mas não prova que os endpoints e autorizações atuais ainda coincidam. Mantive o perfil intacto e não consultei valores de segredos nem reiniciei o Docker Desktop.
 
+Leitura direcionada da nota Obsidian `Session Memory 2026-06-30.md`: a lista de sete servidores é histórica; outra secção chama o perfil de quatro servidores e aponta o Proxmox para `https://pve.homelab.cloud:8006`. A resolução DNS atual de `pve.homelab.cloud` neste portátil não devolveu um registo A/AAAA. As secções consultadas não fornecem um endpoint atual nem um conjunto atual de permissões; as linhas com credenciais foram omitidas durante a inspeção. Não reconstruas nem atives `homelabagent` até confirmar a rede e a configuração contemporâneas.
+
 O upstream tem uma [issue aberta no `docker/mcp-gateway`](https://github.com/docker/mcp-gateway/issues/551) que também relata `deadline_exceeded` em `ResolverService/GetSecrets` persistente após reinícios do Desktop. O relato é de macOS e Docker MCP `v0.43.3`, portanto é apenas um sintoma semelhante, não uma causa confirmada para este Windows com `v0.44.3`. Não foi aplicado nenhum contorno que copie ou contorne os segredos.
 
 ## Segurança
