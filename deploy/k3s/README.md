@@ -197,6 +197,13 @@ Gaming mode stops the local Unsloth model server and 3D world while retaining th
 
 On 2026-11-14, live inspection found the Drisa audio container had restarted three times; its last termination was `OOMKilled` at the 4 GiB limit during MOSS inference. The homelab has 8 GiB RAM and was using about 2 GiB when inspected. The manifest sets the audio container request/limit to 1/5 GiB, retaining about 0.7 GiB below the node's observed capacity at the previous baseline. The updated deployment rolled out successfully; its new pod was Ready with zero restarts and about 2 MiB idle use. A real inference after this change remains to be checked.
 
+The audio.cpp `busy_timeout_ms` bounds how long a later request waits; it does not cancel an inference already running. Its unload API also waits for in-flight inference to finish, so unloading is not a recovery path for a wedged model. If MOSS becomes permanently busy, first confirm the current pod and request state, then restart only the VPS audio Deployment; the model cache is on its PVC and survives pod recreation. Verify rollout readiness, `/v1/models`, a MOSS transcription, and Kokoro speech before declaring recovery. The official [audio.cpp server guide](https://github.com/0xShug0/audio.cpp/blob/main/app/server/README.md) documents the busy timeout behavior and the [API reference](https://github.com/0xShug0/audio.cpp/blob/main/app/server/api.md) documents unload waiting for in-flight requests.
+
+```bash
+sudo k3s kubectl -n iku rollout restart deployment/drisa-audio-vps
+sudo k3s kubectl -n iku rollout status deployment/drisa-audio-vps --timeout=180s
+```
+
 After restarting the K3s server on the VPS, verify the `iku-portal-forward`, `iku-n8n-forward`, `iku-nextcloud-forward`, and `iku-lfm3-forward` systemd units. Restart them if inactive:
 
 ```bash
