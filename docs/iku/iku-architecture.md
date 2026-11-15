@@ -6,7 +6,7 @@ The three machines have different jobs. They are not identical copies of the Iku
 | --- | --- | --- |
 | OVH VPS `vps-4e5174e4` | Primary K3s server and application host | Iku Auth, portal, PostgreSQL Drisa memory, Nextcloud, n8n, private LFM3 router, and MOSS/Kokoro audio service. Tailscale-only forwarding protects internal APIs; Cloudflare Tunnel publishes the website and portal login. It is the only control plane. |
 | Linux `homelab` | Tainted K3s fallback worker and off-host backup receiver | Restic repository and pruning/restore jobs, plus one public-site and Cloudflare Tunnel replica. The `homelab.role=fallback:NoSchedule` taint keeps ordinary workloads off this low-power machine. |
-| Windows laptop | Interactive Drisa client and third compute fallback | Always-on microphone listener and voice gateway. Normal mode uses laptop MOSS STT with Parakeet fallback, Kokoro TTS, and can run Unsloth locally. Gaming mode stops the local Unsloth server and 3D world while keeping the listener and gateway; it routes STT to homelab MOSS with Parakeet fallback, TTS to homelab Kokoro, and LLM requests to VPS LFM3. |
+| Windows laptop | Interactive Drisa client and third compute fallback | Acer Aspire AG15-42P, Ryzen 7 5825U (8 cores/16 threads), 31.4 GiB RAM, AMD Radeon integrated graphics as reported by Windows. Always-on microphone listener and voice gateway. Normal mode uses local MOSS/Parakeet, Kokoro, and Unsloth as fallbacks. Gaming mode stops the local Unsloth server and 3D world while keeping the listener and gateway; it routes STT to homelab MOSS with Parakeet fallback, TTS to homelab Kokoro, and LLM requests to VPS LFM3. |
 
 ## Request and data paths
 
@@ -16,6 +16,14 @@ The three machines have different jobs. They are not identical copies of the Iku
 - VPS MOSS STT, LFM3, and Kokoro TTS are the default routes. In Normal mode, laptop models are fallbacks if the VPS route is unavailable or busy. Gaming mode stops laptop model serving; audio can fall back to the homelab through a loopback-only SSH tunnel, while text remains VPS-only.
 - The public React landing page is served by unprivileged Nginx. `app.iknowu.org` is proxied by that Nginx instance to the Iku portal service, and `cloud.iknowu.org` is proxied to Nextcloud. Cloudflare Tunnel is the public ingress; application ports are not opened on the VPS firewall.
 - PostgreSQL stores encrypted Drisa messages and summaries on a VPS-local PVC. Restic sends encrypted backups to the homelab receiver; the restore drill verified the database backup path. This is recovery, not live database replication.
+
+## Hardware and fallback budget
+
+- VPS: 4 vCPU and 8 GiB RAM. It is the default host for LFM3, MOSS, Kokoro, and the application stack. On 2026-11-15, node metrics showed 77% memory use while services were Ready; do not add another resident inference server such as Unsloth Studio without a fresh capacity test. LFM3 already runs through the private `llama.cpp` service.
+- Homelab: Intel Pentium J3710 (4 cores) and 7.6 GiB RAM. It runs the Restic receiver, public-site replica, and K3s fallback audio service, but remains a worker and is not a control-plane or general LLM replacement.
+- Laptop: Windows reported an 8-core/16-thread Ryzen 7 5825U, 31.4 GiB RAM, and integrated Radeon graphics. Normal mode keeps local LFM3, Parakeet, and Kokoro available as fallbacks while the VPS remains primary. Gaming mode stops laptop inference and the 3D world; the gateway and microphone listener remain active, with VPS text/audio primary and homelab audio as fallback. Text has no laptop fallback while gaming.
+
+The laptop hardware values were read from Windows on 2026-11-15; the integrated graphics entry is the only adapter reported in that snapshot. They are a capacity reference, not a promise of model throughput. The VPS measurements are instantaneous and should be refreshed before any service is added.
 
 ## Network isolation
 
