@@ -475,7 +475,7 @@ def _ensure_homelab_model(requests, base_url: str, headers: dict, model_id: str)
 
 
 def unsloth_transcribe(wav_path: Path, model: str | None = None) -> str:
-    """STT via Unsloth OpenAI-compatible endpoint."""
+    """Transcribe with the native audio.cpp endpoint or the OpenAI-compatible API."""
     is_homelab = False
     try:
         import requests
@@ -489,8 +489,19 @@ def unsloth_transcribe(wav_path: Path, model: str | None = None) -> str:
             is_homelab = bool(cfg["audio_url"]) and base_url == cfg["audio_url"]
             if is_homelab:
                 _ensure_homelab_model(requests, base_url, headers, data["model"])
+            model_identity = data["model"].lower()
+            is_local_audio_cpp = not is_homelab and any(
+                marker in model_identity for marker in ("moss-transcribe-diarize", "moss_transcribe_diarize", "parakeet-tdt", "parakeet_tdt")
+            )
+            if is_local_audio_cpp:
+                # Unsloth's audio.cpp sidecar exposes its own route; its /v1
+                # OpenAI transcription route does not serve these loaded models.
+                endpoint = f"{base_url.removesuffix('/v1')}/api/inference/audio/transcriptions"
+                data["device"] = "auto"
+            else:
+                endpoint = f"{base_url}/audio/transcriptions"
             inference_timeout = 180 if is_homelab and data["model"] == "moss" else 120
-            r = requests.post(f"{base_url}/audio/transcriptions", headers=headers, files=files, data=data,
+            r = requests.post(endpoint, headers=headers, files=files, data=data,
                               timeout=(5, inference_timeout))
             r.raise_for_status()
             if is_homelab:

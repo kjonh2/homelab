@@ -129,6 +129,41 @@ class ModelCatalogTests(unittest.TestCase):
         save_selection.assert_called_once_with("vps", "llm", "lfm3-text")
 
 
+class PcAudioCppRouteTests(unittest.TestCase):
+    def test_pc_moss_and_parakeet_use_native_audio_cpp_endpoint(self):
+        import requests
+
+        class FakeResponse:
+            @staticmethod
+            def raise_for_status():
+                return None
+
+            @staticmethod
+            def json():
+                return {"text": "Texto reconhecido."}
+
+        cfg = {
+            "base_url": "http://127.0.0.1:8888/v1", "key": "pc-key",
+            "audio_url": "http://127.0.0.1:8766/v1", "audio_key": "",
+            "stt_url": "http://127.0.0.1:8888/v1", "stt_key": "",
+            "tts_url": "http://127.0.0.1:8888/v1", "tts_key": "",
+            "stt_model": "audio-cpp/audio.cpp-gguf/MOSS-Transcribe-Diarize-GGUF",
+            "fallback_stt_model": "audio-cpp/audio.cpp-gguf/Parakeet-TDT-0.6B-v3-GGUF",
+        }
+        with tempfile.TemporaryDirectory(prefix="drisa-pc-audio-cpp-test-") as directory:
+            wav = Path(directory) / "input.wav"
+            wav.write_bytes(b"RIFF-test")
+            for model in (cfg["stt_model"], cfg["fallback_stt_model"]):
+                with (
+                    patch.object(gateway, "_unsloth_cfg", return_value=cfg),
+                    patch.object(requests, "post", return_value=FakeResponse()) as post,
+                ):
+                    self.assertEqual(gateway.unsloth_transcribe(wav, model), "Texto reconhecido.")
+                self.assertEqual(post.call_args.args[0], "http://127.0.0.1:8888/api/inference/audio/transcriptions")
+                self.assertEqual(post.call_args.kwargs["data"], {"model": model, "device": "auto"})
+                self.assertEqual(post.call_args.kwargs["headers"], {"Authorization": "Bearer pc-key"})
+
+
 class AudioPayloadTests(unittest.TestCase):
     @staticmethod
     def make_wav(payload: bytes) -> bytes:
