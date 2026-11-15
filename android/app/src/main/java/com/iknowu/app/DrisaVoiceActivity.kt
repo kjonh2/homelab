@@ -277,12 +277,7 @@ class DrisaVoiceActivity : AppCompatActivity() {
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                val details = listOfNotNull(
-                    response?.let { "HTTP ${it.code}" },
-                    t.javaClass.simpleName,
-                    t.message?.takeIf { it.isNotBlank() },
-                ).joinToString(": ")
-                scheduleReconnect(webSocket, "Falha na ligação ($details).")
+                scheduleReconnect(webSocket, DrisaConnectionError.userMessage(t, response?.code))
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
