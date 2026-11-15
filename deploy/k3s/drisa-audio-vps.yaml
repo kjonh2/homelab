@@ -257,7 +257,7 @@ spec:
               memory: 1Gi
             limits:
               cpu: "3"
-              memory: 3584Mi
+              memory: 4Gi
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
