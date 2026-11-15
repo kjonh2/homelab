@@ -8,6 +8,7 @@ metadata:
     app.kubernetes.io/part-of: iku
 spec:
   type: ClusterIP
+  clusterIP: 10.43.41.36
   selector:
     app.kubernetes.io/name: drisa-memory-postgres-v5
   ports:

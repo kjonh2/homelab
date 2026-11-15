@@ -24,7 +24,7 @@ def main() -> None:
         input=json.dumps(secret).encode("utf-8"), capture_output=True, check=True,
     )
     print(proc.stdout.decode("utf-8", errors="replace").strip())
-    dsn = (f"host=100.67.97.92 port=5432 dbname=drisa_memory user=drisa_memory "
+    dsn = (f"host=127.0.0.1 port=5433 dbname=drisa_memory user=drisa_memory "
            f"password={password} sslmode=disable connect_timeout=3")
     config_path = home / "drisa_memory_config.json"
     config_path.write_text(json.dumps({"dsn": dsn, "conversation_id": "kiko-main"}, indent=2), encoding="utf-8")

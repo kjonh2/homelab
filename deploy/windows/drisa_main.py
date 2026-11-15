@@ -185,7 +185,7 @@ class DrisaAssistant:
             "llm": {
                 "base_url": "http://127.0.0.1:8888/v1",
                 "model": "AtomicChat/LFM3-1.7B-Uncensored-GGUF",
-                "max_tokens": 150,
+                "max_tokens": 64,
                 "temperature": 0.7
             },
             "noise_adaptation": {
@@ -712,13 +712,14 @@ class DrisaAssistant:
             try:
                 import json as _json
                 import urllib.request
+                import requests as _requests
 
                 llm_cfg = self.config.get("llm", {})
                 model = os.environ.get("DRISA_LLM_MODEL", llm_cfg.get("model", "AtomicChat/LFM3-1.7B-Uncensored-GGUF"))
                 fallback_model = os.environ.get(
                     "DRISA_LLM_FALLBACK_MODEL", llm_cfg.get("fallback_model", "AtomicChat/LFM3-1.7B-Uncensored-GGUF")
                 )
-                max_tokens = int(os.environ.get("DRISA_LLM_MAX_TOKENS", llm_cfg.get("max_tokens", 150)))
+                max_tokens = int(os.environ.get("DRISA_LLM_MAX_TOKENS", llm_cfg.get("max_tokens", 64)))
                 temperature = float(os.environ.get("DRISA_LLM_TEMPERATURE", llm_cfg.get("temperature", 0.7)))
                 local_url = os.environ.get(
                     "DRISA_UNSLOTH_URL", llm_cfg.get("base_url", "http://127.0.0.1:8888/v1")
@@ -775,11 +776,13 @@ class DrisaAssistant:
                             continue
 
                     for output_budget in (max_tokens, min(max_tokens * 2, 400)):
+                        request_failed = False
                         try:
                             response = memory_chat(
                                 text, system_prompt=system_prompt, base_url=base_url, key=key,
                                 model=provider_model, max_tokens=output_budget, temperature=temperature,
                                 spoken_cleaner=prepare_spoken_text,
+                                request_timeout=45 if provider_name == "VPS" else 90,
                             )
                             if response and not is_utterance_echo(text, response):
                                 logger.info("LLM response received from %s with PostgreSQL conversation memory", provider_name)
@@ -790,8 +793,13 @@ class DrisaAssistant:
                                     logger.error(f"Failed to write response bridge: {e}")
                                 self._gemini_processing = False
                                 return response
+                        except _requests.exceptions.RequestException as e:
+                            logger.warning("%s LLM request exceeded its response window (%s)", provider_name, type(e).__name__)
+                            request_failed = True
                         except Exception as e:
                             logger.warning("Conversation memory failed (%s); trying one-shot LLM", type(e).__name__)
+                        if request_failed:
+                            break
                         payload = _json.dumps({
                             "model": provider_model,
                             "messages": [
@@ -805,7 +813,7 @@ class DrisaAssistant:
                             req = urllib.request.Request(
                                 f"{base_url}/chat/completions", data=payload, headers=headers
                             )
-                            with urllib.request.urlopen(req, timeout=60) as resp:
+                            with urllib.request.urlopen(req, timeout=45 if provider_name == "VPS" else 90) as resp:
                                 data = _json.loads(resp.read().decode("utf-8"))
                             response = prepare_spoken_text(data["choices"][0]["message"]["content"])
                             if response and not is_utterance_echo(text, response):
@@ -823,6 +831,8 @@ class DrisaAssistant:
                             )
                         except Exception as e:
                             logger.warning("%s LLM request failed (%s)", provider_name, type(e).__name__)
+                            if provider_name == "VPS":
+                                break
             except Exception as e:
                 logger.warning("LLM provider setup failed (%s)", type(e).__name__)
 

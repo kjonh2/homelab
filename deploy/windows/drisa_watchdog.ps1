@@ -44,6 +44,7 @@ function Set-DrisaRuntimeEnvironment([bool]$GamingMode) {
     $env:DRISA_STT_URL = if ($config.stt_url) { $config.stt_url } elseif ($env:DRISA_STT_HOST -in @('homelab', 'vps')) { $env:DRISA_AUDIO_URL } else { $env:DRISA_UNSLOTH_URL }
     $env:DRISA_LLM_MODEL = if ($config.llm_model) { $config.llm_model } else { 'AtomicChat/LFM3-1.7B-Uncensored-GGUF' }
     $env:DRISA_LLM_HOST = if ($config.llm_host) { $config.llm_host } else { 'pc' }
+    $env:DRISA_LLM_MAX_TOKENS = '64'
     if ($config.llm_url) { $env:DRISA_LLM_URL = $config.llm_url }
     $env:DRISA_LLM_FALLBACK_URL = if ($config.llm_fallback_url) { $config.llm_fallback_url } else { $env:DRISA_UNSLOTH_URL }
     $env:DRISA_LLM_FALLBACK_MODEL = if ($config.llm_fallback_model) { $config.llm_fallback_model } else { $env:DRISA_LLM_MODEL }
@@ -136,11 +137,14 @@ function Ensure-DrisaVpsAudioTunnel {
             '-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=30', '-o', 'ServerAliveCountMax=3',
             '-L', $forward
         ) -WindowStyle Hidden -PassThru
-        Start-Sleep -Milliseconds 1200
-        $listener = Get-NetTCPConnection -State Listen -LocalAddress $listenAddress -LocalPort $listenPort -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-        $matching = @(Get-CimInstance Win32_Process -Filter "Name = 'ssh.exe'" -ErrorAction SilentlyContinue |
-            Where-Object { ([string]$_.CommandLine).Contains($forward) -and ([string]$_.CommandLine).Contains($sshTarget) })
+        for ($attempt = 0; $attempt -lt 10; $attempt++) {
+            Start-Sleep -Milliseconds 500
+            $listener = Get-NetTCPConnection -State Listen -LocalAddress $listenAddress -LocalPort $listenPort -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+            $matching = @(Get-CimInstance Win32_Process -Filter "Name = 'ssh.exe'" -ErrorAction SilentlyContinue |
+                Where-Object { ([string]$_.CommandLine).Contains($forward) -and ([string]$_.CommandLine).Contains($sshTarget) })
+            if ($listener -and @($matching | Where-Object { $_.ProcessId -eq $listener.OwningProcess }).Count -gt 0) { break }
+        }
         if ($listener -and @($matching | Where-Object { $_.ProcessId -eq $listener.OwningProcess }).Count -gt 0) {
             Write-DrisaWatchdogLog "VPS audio tunnel active pid=$($listener.OwningProcess) on $listenAddress`:$listenPort"
         } else {
@@ -148,6 +152,47 @@ function Ensure-DrisaVpsAudioTunnel {
         }
     } catch {
         Write-DrisaWatchdogLog "VPS audio tunnel error: $($_.Exception.Message)"
+    }
+}
+
+function Ensure-DrisaPostgresTunnel {
+    $listenAddress = '127.0.0.1'
+    $listenPort = 5433
+    $forward = '127.0.0.1:5433:10.43.41.36:5432'
+    $sshTarget = 'vps-4e5174e4'
+    $tailscaleExe = Join-Path $env:ProgramFiles 'Tailscale\tailscale.exe'
+    if (-not (Test-Path -LiteralPath $tailscaleExe)) {
+        Write-DrisaWatchdogLog 'PostgreSQL tunnel skipped: Tailscale CLI not found'
+        return
+    }
+    $matching = @(Get-CimInstance Win32_Process -Filter "Name = 'ssh.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { ([string]$_.CommandLine).Contains($forward) -and ([string]$_.CommandLine).Contains($sshTarget) })
+    $listener = Get-NetTCPConnection -State Listen -LocalAddress $listenAddress -LocalPort $listenPort -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($listener -and @($matching | Where-Object { $_.ProcessId -eq $listener.OwningProcess }).Count -gt 0) { return }
+    if ($listener) {
+        Write-DrisaWatchdogLog "PostgreSQL tunnel skipped: $listenAddress`:$listenPort is owned by another process"
+        return
+    }
+    if ($matching.Count -gt 0) { return }
+    try {
+        $started = Start-Process -FilePath $tailscaleExe -ArgumentList @(
+            'ssh', 'ubuntu@vps-4e5174e4', '-N', '-o', 'ExitOnForwardFailure=yes',
+            '-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=30', '-o', 'ServerAliveCountMax=3',
+            '-L', $forward
+        ) -WindowStyle Hidden -PassThru
+        Start-Sleep -Milliseconds 1200
+        $listener = Get-NetTCPConnection -State Listen -LocalAddress $listenAddress -LocalPort $listenPort -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        $matching = @(Get-CimInstance Win32_Process -Filter "Name = 'ssh.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { ([string]$_.CommandLine).Contains($forward) -and ([string]$_.CommandLine).Contains($sshTarget) })
+        if ($listener -and @($matching | Where-Object { $_.ProcessId -eq $listener.OwningProcess }).Count -gt 0) {
+            Write-DrisaWatchdogLog "PostgreSQL tunnel active pid=$($listener.OwningProcess) on $listenAddress`:$listenPort"
+        } else {
+            Write-DrisaWatchdogLog "PostgreSQL tunnel failed to start (tailscale pid=$($started.Id), exit=$($started.ExitCode))"
+        }
+    } catch {
+        Write-DrisaWatchdogLog "PostgreSQL tunnel error: $($_.Exception.Message)"
     }
 }
 
@@ -208,6 +253,55 @@ function Get-DrisaProcesses([string]$ScriptPath) {
 
 function Ensure-DrisaProcess([string]$ScriptPath, [string]$PidFile, [string]$Name) {
     $running = @(Get-DrisaProcesses $ScriptPath)
+    if ($running.Count -gt 1) {
+        $processIds = @{}
+        foreach ($process in $running) { $processIds[[int]$process.ProcessId] = $true }
+        $roots = @($running | Where-Object { -not $processIds.ContainsKey([int]$_.ParentProcessId) })
+        $processGroups = @()
+        foreach ($root in $roots) {
+            $members = @($root)
+            while ($true) {
+                $parentIds = @($members | ForEach-Object { [int]$_.ProcessId })
+                $memberIds = @($members | ForEach-Object { [int]$_.ProcessId })
+                $children = @($running | Where-Object {
+                    $parentIds -contains [int]$_.ParentProcessId -and $memberIds -notcontains [int]$_.ProcessId
+                })
+                if ($children.Count -eq 0) { break }
+                $members += $children
+            }
+            $processGroups += [pscustomobject]@{ Root = $root; Members = $members }
+        }
+        if ($processGroups.Count -le 1) { $processGroups = @() }
+    }
+    if ($processGroups.Count -gt 1) {
+        $preferredPid = $null
+        if ($Name -eq 'gateway') {
+            $listener = Get-NetTCPConnection -State Listen -LocalAddress 127.0.0.1 -LocalPort 8765 -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+            if ($listener) {
+                $activeGroup = $processGroups | Where-Object { $_.Members.ProcessId -contains $listener.OwningProcess } | Select-Object -First 1
+                if ($activeGroup) { $preferredPid = $activeGroup.Root.ProcessId }
+            }
+        }
+        if (-not $preferredPid -and (Test-Path -LiteralPath $PidFile)) {
+            $storedPid = 0
+            if ([int]::TryParse((Get-Content -LiteralPath $PidFile -Raw).Trim(), [ref]$storedPid)) {
+                $storedGroup = $processGroups | Where-Object { $_.Members.ProcessId -contains $storedPid } | Select-Object -First 1
+                if ($storedGroup) { $preferredPid = $storedGroup.Root.ProcessId }
+            }
+        }
+        if (-not $preferredPid) {
+            $preferredPid = ($processGroups.Root | Sort-Object CreationDate | Select-Object -First 1).ProcessId
+        }
+        foreach ($group in $processGroups | Where-Object { $_.Root.ProcessId -ne $preferredPid }) {
+            foreach ($process in $group.Members | Sort-Object CreationDate -Descending) {
+                Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+            }
+            Write-DrisaWatchdogLog "stopped duplicate $Name process tree pid=$($group.Root.ProcessId); keeping pid=$preferredPid"
+        }
+        Start-Sleep -Milliseconds 500
+        $running = @(Get-DrisaProcesses $ScriptPath)
+    }
     if ($Name -eq 'voice listener' -and -not $gamingMode) {
         $bridgePath = Join-Path $drisaDir 'drisa_bridge.tmp'
         $bridge = Get-Item -LiteralPath $bridgePath -ErrorAction SilentlyContinue
@@ -271,6 +365,7 @@ try {
     if ($env:DRISA_STT_HOST -eq 'vps' -or $env:DRISA_TTS_HOST -eq 'vps') {
         Ensure-DrisaVpsAudioTunnel
     }
+    Ensure-DrisaPostgresTunnel
     if ($env:DRISA_STT_HOST -eq 'homelab' -or $env:DRISA_TTS_HOST -eq 'homelab') {
         Ensure-DrisaAudioTunnel
     }

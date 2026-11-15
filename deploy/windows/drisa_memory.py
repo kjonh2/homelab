@@ -85,7 +85,7 @@ def _render_and_count(base_url, key, model, messages):
     return token_count, context_size
 
 
-def _summarize(messages, base_url, key, model, n_ctx):
+def _summarize(messages, base_url, key, model, n_ctx, request_timeout=90):
     """Summarize old conversation in token-bounded chunks; preserve recent turns."""
     system = messages[0]
     summary = next((m["content"] for m in messages[1:] if m.get("name") == "drisa_memory_summary"), "")
@@ -133,7 +133,7 @@ def _summarize(messages, base_url, key, model, n_ctx):
             prompt_messages.append({"role": "system", "content": "Resumo anterior (atualiza sem perder factos duradouros): " + compacted})
         prompt_messages.append({"role": "system", "content": "Resume fielmente em português de Portugal. Preserva preferências duradouras, factos do projeto, decisões e pedidos pendentes. Exclui credenciais, chaves, códigos e detalhes transitórios. Máximo 250 tokens."})
         prompt_messages.extend(part)
-        response = requests.post(base_url + "/chat/completions", json={"model": model, "messages": prompt_messages, "max_tokens": 280, "temperature": 0.2, "reasoning": {"effort": "none"}}, headers=_api_headers(key), timeout=90)
+        response = requests.post(base_url + "/chat/completions", json={"model": model, "messages": prompt_messages, "max_tokens": 280, "temperature": 0.2, "reasoning": {"effort": "none"}}, headers=_api_headers(key), timeout=request_timeout)
         response.raise_for_status()
         compacted = response.json()["choices"][0]["message"]["content"].strip()
     out = [system]
@@ -153,7 +153,7 @@ def _summary_cursor(rows, summarized_count: int, current_cursor: int) -> int:
 
 def chat(user_text: str, *, system_prompt: str, base_url: str, key: str, model: str,
          max_tokens: int, temperature: float, conversation_id: str = DEFAULT_CONVERSATION_ID,
-         spoken_cleaner=lambda value: value) -> str | None:
+         spoken_cleaner=lambda value: value, request_timeout: int = 90) -> str | None:
     """Generate a reply with shared encrypted PG history. Returns None if PG is unavailable."""
     from uuid import uuid4
     try:
@@ -166,6 +166,7 @@ def chat(user_text: str, *, system_prompt: str, base_url: str, key: str, model: 
         _ensure_schema(conn)
         conn.execute("INSERT INTO drisa_conversations(conversation_id) VALUES (%s) ON CONFLICT DO NOTHING", (conversation_id,))
         # Serialize both laptop and Android turns for this shared conversation.
+        conn.execute("SET LOCAL lock_timeout = '45s'")
         conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (conversation_id,))
         row = conn.execute("SELECT summary_ciphertext, summarized_through FROM drisa_conversations WHERE conversation_id=%s", (conversation_id,)).fetchone()
         summarized_through = row[1] if row else 0
@@ -180,7 +181,9 @@ def chat(user_text: str, *, system_prompt: str, base_url: str, key: str, model: 
         try:
             tokens, n_ctx = _render_and_count(base_url, key, model, messages)
             if tokens + max_tokens >= n_ctx * CONTEXT_TRIGGER:
-                messages, summary, changed, summarized_count = _summarize(messages, base_url, key, model, n_ctx)
+                messages, summary, changed, summarized_count = _summarize(
+                    messages, base_url, key, model, n_ctx, request_timeout=request_timeout
+                )
                 tokens, _ = _render_and_count(base_url, key, model, messages)
                 logger.info("context compacted: %s/%s tokens (%.1f%%)", tokens + max_tokens, n_ctx, 100 * (tokens + max_tokens) / n_ctx)
                 if changed:
@@ -189,12 +192,22 @@ def chat(user_text: str, *, system_prompt: str, base_url: str, key: str, model: 
                     # on the next request instead of silently disappearing from context.
                     last_id = _summary_cursor(rows, summarized_count, summarized_through)
                     conn.execute("UPDATE drisa_conversations SET summary_ciphertext=%s, summarized_through=%s, updated_at=now() WHERE conversation_id=%s", (cipher.encrypt(summary.encode()), last_id, conversation_id))
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else None
+            if status not in (404, 405):
+                raise
+            logger.warning("context inspection endpoint unavailable (HTTP %s); using recent history", status)
+            summary_messages = [message for message in history[1:] if message.get("name") == "drisa_memory_summary"]
+            recent_turns = [message for message in history[1:] if message.get("role") in ("user", "assistant")][-4:]
+            messages = [history[0], *summary_messages, *recent_turns, {"role": "user", "content": user_text}]
+        except requests.RequestException as exc:
+            raise
         except Exception as exc:
             # With a live DB, fail closed on inability to measure: never send unbounded history.
             logger.warning("context measurement/compaction failed (%s); using current short history", type(exc).__name__)
             messages = [history[0], *history[-4:], {"role": "user", "content": user_text}]
         logger.info("context usage before generation: %s/%s tokens including %s completion reserve", tokens if 'tokens' in locals() else -1, n_ctx, max_tokens)
-        response = requests.post(base_url + "/chat/completions", json={"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature}, headers=_api_headers(key), timeout=90)
+        response = requests.post(base_url + "/chat/completions", json={"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature}, headers=_api_headers(key), timeout=request_timeout)
         response.raise_for_status()
         reply = spoken_cleaner(response.json()["choices"][0]["message"]["content"])
         if reply:
@@ -205,6 +218,10 @@ def chat(user_text: str, *, system_prompt: str, base_url: str, key: str, model: 
             ))
         conn.commit()
         return reply
+    except requests.RequestException as exc:
+        conn.rollback()
+        logger.warning("LLM request failed (%s)", type(exc).__name__)
+        raise
     except Exception as exc:
         conn.rollback()
         logger.warning("PostgreSQL conversation memory unavailable (%s)", type(exc).__name__)

@@ -41,7 +41,7 @@ class DrisaMemorySummaryTests(unittest.TestCase):
         messages.append({"role": "user", "content": "pergunta atual"})
 
         compacted, summary, changed, summarized_count = drisa_memory._summarize(
-            messages, "http://llm/v1", "", "model", 1000
+            messages, "http://llm/v1", "", "model", 1000, request_timeout=17
         )
 
         self.assertTrue(changed)
@@ -49,6 +49,69 @@ class DrisaMemorySummaryTests(unittest.TestCase):
         self.assertEqual(summarized_count, 6)
         self.assertEqual(compacted[-3:-1], messages[-3:-1])
         self.assertEqual(compacted[-1], messages[-1])
+        self.assertEqual(post.call_args.kwargs["timeout"], 17)
+
+    @patch.object(drisa_memory, "_ensure_schema")
+    @patch.object(drisa_memory, "_render_and_count", return_value=(10, 4096))
+    @patch.object(drisa_memory, "_connect")
+    @patch.object(drisa_memory, "_settings", return_value=({}, Mock()))
+    @patch.object(drisa_memory.requests, "post", side_effect=drisa_memory.requests.Timeout)
+    def test_llm_timeout_propagates_for_host_fallback(self, post, _settings, connect, _render, _schema):
+        conn = Mock()
+        def execute(query, *_args):
+            cursor = Mock()
+            if "SELECT summary_ciphertext" in query:
+                cursor.fetchone.return_value = (b"", 0)
+            elif "SELECT id, role" in query:
+                cursor.fetchall.return_value = []
+            return cursor
+        conn.execute.side_effect = execute
+        connect.return_value = conn
+
+        with self.assertRaises(drisa_memory.requests.Timeout):
+            drisa_memory.chat(
+                "Olá", system_prompt="sistema", base_url="http://vps/v1", key="", model="lfm",
+                max_tokens=64, temperature=0.2, request_timeout=45,
+            )
+
+        self.assertEqual(post.call_args.kwargs["timeout"], 45)
+        conn.rollback.assert_called_once()
+        conn.close.assert_called_once()
+
+    @patch.object(drisa_memory, "_ensure_schema")
+    @patch.object(
+        drisa_memory,
+        "_render_and_count",
+        side_effect=drisa_memory.requests.HTTPError(response=Mock(status_code=404)),
+    )
+    @patch.object(drisa_memory, "_connect")
+    @patch.object(drisa_memory, "_settings", return_value=({}, Mock()))
+    @patch.object(drisa_memory.requests, "post")
+    def test_missing_context_inspection_route_keeps_recent_history(self, post, _settings, connect, _render, _schema):
+        conn = Mock()
+        def execute(query, *_args):
+            cursor = Mock()
+            if "SELECT summary_ciphertext" in query:
+                cursor.fetchone.return_value = (b"", 0)
+            elif "SELECT id, role" in query:
+                cursor.fetchall.return_value = []
+            return cursor
+        conn.execute.side_effect = execute
+        connect.return_value = conn
+        response = Mock()
+        response.json.return_value = {"choices": [{"message": {"content": "Resposta local."}}]}
+        post.return_value = response
+
+        reply = drisa_memory.chat(
+            "Olá", system_prompt="sistema", base_url="http://pc/v1", key="", model="lfm",
+            max_tokens=64, temperature=0.2, request_timeout=90,
+        )
+
+        self.assertEqual(reply, "Resposta local.")
+        self.assertEqual(post.call_args.kwargs["json"]["messages"], [
+            {"role": "system", "content": "sistema"},
+            {"role": "user", "content": "Olá"},
+        ])
 
 
 if __name__ == "__main__":

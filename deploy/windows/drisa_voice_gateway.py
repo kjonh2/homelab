@@ -44,7 +44,7 @@ MAX_AUDIO_BYTES = 6 * 1024 * 1024
 MAX_AUDIO_BASE64_CHARS = ((MAX_AUDIO_BYTES + 2) // 3) * 4
 MAX_WEBSOCKET_MESSAGE_BYTES = 8 * 1024 * 1024
 STT_TIMEOUT_SECONDS = 210
-LLM_TIMEOUT_SECONDS = 120
+LLM_TIMEOUT_SECONDS = 150
 TTS_TIMEOUT_SECONDS = 150
 ACTIVE_CLIENTS = set()
 
@@ -875,6 +875,7 @@ def llm_reply(text: str) -> str:
         owner = os.environ.get("DRISA_OWNER_NAME", cfg.get("assistant_owner", "utilizador")).strip() or "utilizador"
         system_prompt = f"És a Drisa, assistente pessoal de {owner}. Responde em português de Portugal com uma resposta final, natural e pronta a ser dita em voz alta pelo Kokoro. Limita-te a duas frases curtas e, sempre que possível, a 40 palavras. Não mostres raciocínio, análise, passos internos, etiquetas ou markdown. Se não souberes, dizes."
         primary_url, primary_model, primary_key = cfg["llm_url"], cfg["llm_model"], cfg.get("llm_key", "")
+        primary_request_timeout = 45 if cfg.get("llm_host") == "vps" else 90
         reply = None
         primary_error = None
         if cfg.get("llm_host") == "vps":
@@ -887,20 +888,24 @@ def llm_reply(text: str) -> str:
             try:
                 reply = memory_chat(
                     text, system_prompt=system_prompt, base_url=primary_url, key=primary_key,
-                    model=primary_model, max_tokens=120, temperature=0.7,
+                    model=primary_model, max_tokens=64, temperature=0.7,
                     spoken_cleaner=prepare_spoken_text,
+                    request_timeout=primary_request_timeout,
                 )
+            except requests.RequestException as e:
+                primary_error = e
+                print(f"[llm] VPS sem resposta no prazo; a tentar fallback: {type(e).__name__}")
             except Exception as e:
                 print(f"[llm] memória PostgreSQL indisponível; vou tentar a API diretamente: {e}")
 
-        def direct_reply(base_url: str, model: str, key: str) -> str:
+        def direct_reply(base_url: str, model: str, key: str, timeout_seconds: int = 90) -> str:
             headers = {"Content-Type": "application/json"}
             if key:
                 headers["Authorization"] = f"Bearer {key}"
             payload = {"model": model, "messages": [
                 {"role": "system", "content": system_prompt}, {"role": "user", "content": text}],
-                "max_tokens": 120, "temperature": 0.7}
-            response = requests.post(f"{base_url}/chat/completions", json=payload, headers=headers, timeout=90)
+                "max_tokens": 64, "temperature": 0.7}
+            response = requests.post(f"{base_url}/chat/completions", json=payload, headers=headers, timeout=(5, timeout_seconds))
             response.raise_for_status()
             return prepare_spoken_text(response.json()["choices"][0]["message"]["content"])
 
@@ -908,7 +913,7 @@ def llm_reply(text: str) -> str:
             try:
                 if primary_error is not None:
                     raise primary_error
-                reply = direct_reply(primary_url, primary_model, primary_key)
+                reply = direct_reply(primary_url, primary_model, primary_key, primary_request_timeout)
                 if reply:
                     print("[llm] resposta gerada diretamente pela API principal")
             except Exception as primary_error:
@@ -922,14 +927,15 @@ def llm_reply(text: str) -> str:
                     _ensure_pc_llm_fallback_loaded(requests, fallback_model)
                     reply = memory_chat(
                         text, system_prompt=system_prompt, base_url=fallback_url, key=fallback_key,
-                        model=fallback_model, max_tokens=120, temperature=0.7,
+                        model=fallback_model, max_tokens=64, temperature=0.7,
                         spoken_cleaner=prepare_spoken_text,
+                        request_timeout=90,
                     )
                 except Exception as e:
                     print(f"[llm] memória no fallback do portátil indisponível: {e}")
                 if not reply:
                     _ensure_pc_llm_fallback_loaded(requests, fallback_model)
-                    reply = direct_reply(fallback_url, fallback_model, fallback_key)
+                    reply = direct_reply(fallback_url, fallback_model, fallback_key, 90)
                 if reply:
                     print("[llm] resposta gerada pelo fallback do portátil")
         if is_utterance_echo(text, reply):
