@@ -13,6 +13,7 @@ $files = @(
     'drisa_main.py',
     'drisa_log_rotation.py',
     'drisa_memory.py',
+    'drisa_model_loader.py',
     'drisa_mode.ps1',
     'drisa_remote_config.ps1',
     'drisa_speech_text.py',
