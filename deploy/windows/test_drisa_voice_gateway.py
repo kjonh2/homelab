@@ -130,6 +130,79 @@ class ModelCatalogTests(unittest.TestCase):
 
 
 class PcAudioCppRouteTests(unittest.TestCase):
+    def test_pc_stt_catalog_uses_native_audio_cpp_status(self):
+        import requests
+
+        moss = "audio-cpp/audio.cpp-gguf/MOSS-Transcribe-Diarize-GGUF"
+        parakeet = "audio-cpp/audio.cpp-gguf/Parakeet-TDT-0.6B-v3-GGUF"
+
+        class StatusResponse:
+            @staticmethod
+            def raise_for_status():
+                return None
+
+            @staticmethod
+            def json():
+                return {"audiocpp": {"downloaded_models": [moss, parakeet, "audiocpp-parakeet-tdt-0.6b-v3"], "loaded_model": parakeet}}
+
+        with (
+            patch.object(gateway, "_unsloth_cfg", return_value={"base_url": "http://127.0.0.1:8888/v1"}),
+            patch.object(gateway, "load_config", return_value={"stt_host": "pc", "stt_model": moss}),
+            patch.object(gateway, "_mcp_tool") as mcp_tool,
+            patch.object(requests, "get", return_value=StatusResponse()) as get,
+        ):
+            result = gateway.model_catalog("pc", "stt")
+
+        get.assert_called_once_with("http://127.0.0.1:8888/api/inference/audio/stt/status", timeout=(5, 15))
+        mcp_tool.assert_not_called()
+        self.assertEqual(result["selected"], moss)
+        self.assertEqual(result["models"], [{"id": moss, "loaded": False}, {"id": parakeet, "loaded": True}])
+
+    def test_pc_stt_load_uses_native_audio_cpp_api(self):
+        import requests
+
+        moss = "audio-cpp/audio.cpp-gguf/MOSS-Transcribe-Diarize-GGUF"
+        parakeet = "audio-cpp/audio.cpp-gguf/Parakeet-TDT-0.6B-v3-GGUF"
+
+        class StatusResponse:
+            def __init__(self, loaded_model):
+                self.loaded_model = loaded_model
+
+            @staticmethod
+            def raise_for_status():
+                return None
+
+            def json(self):
+                return {"audiocpp": {"downloaded_models": [moss, parakeet], "loaded_model": self.loaded_model, "loading": False}}
+
+        class LoadResponse:
+            @staticmethod
+            def raise_for_status():
+                return None
+
+            @staticmethod
+            def json():
+                return {"success": True}
+
+        with (
+            patch.object(gateway, "_unsloth_cfg", return_value={"base_url": "http://127.0.0.1:8888/v1"}),
+            patch.object(gateway, "load_config", return_value={"stt_host": "pc", "stt_model": parakeet}),
+            patch.object(gateway, "_mcp_tool") as mcp_tool,
+            patch.object(requests, "get", side_effect=[StatusResponse(parakeet), StatusResponse(parakeet), StatusResponse(moss)]) as get,
+            patch.object(requests, "post", return_value=LoadResponse()) as post,
+            patch.object(gateway, "_save_model_selection") as save_selection,
+            patch.object(gateway.time, "sleep") as sleep,
+        ):
+            message = gateway.load_model_for_app("pc", "stt", moss)
+
+        self.assertEqual(message, "Modelo carregado no portátil.")
+        self.assertEqual(post.call_args.args[0], "http://127.0.0.1:8888/api/inference/audio/stt/load")
+        self.assertEqual(post.call_args.kwargs["json"], {"model": moss, "engine": "audiocpp", "device": "auto"})
+        self.assertEqual(get.call_count, 3)
+        mcp_tool.assert_not_called()
+        sleep.assert_not_called()
+        save_selection.assert_called_once_with("pc", "stt", moss)
+
     def test_pc_moss_and_parakeet_use_native_audio_cpp_endpoint(self):
         import requests
 

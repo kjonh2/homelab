@@ -222,6 +222,17 @@ def _is_image_generation_model(item: dict) -> bool:
 def _pc_model_catalog(category: str) -> dict:
     if category not in ("llm", "stt", "tts"):
         raise ValueError("Categoria de modelo inválida.")
+    if category == "stt":
+        import requests
+        state = _pc_audio_cpp_status(requests)
+        downloaded = state.get("downloaded_models", [])
+        if not isinstance(downloaded, list):
+            raise RuntimeError("O Unsloth não devolveu o catálogo de modelos STT descarregados.")
+        loaded_id = state.get("loaded_model") or state.get("loaded_variant")
+        models = [{"id": model_id, "loaded": model_id == loaded_id}
+                  for model_id in downloaded if isinstance(model_id, str)
+                  and model_id.startswith("audio-cpp/audio.cpp-gguf/")]
+        return {"models": models, "selected": _selected_model(load_config(), "pc", category), "message": ""}
     result = _mcp_tool("list_models", {"kind": category, "source": "local", "loaded_only": False})
     entries = result.get("models", [])
     if category == "llm":
@@ -229,6 +240,19 @@ def _pc_model_catalog(category: str) -> dict:
     models = [{"id": item.get("id", ""), "loaded": bool(item.get("loaded", False))}
               for item in entries if item.get("id")]
     return {"models": models, "selected": _selected_model(load_config(), "pc", category), "message": ""}
+
+
+def _pc_audio_cpp_status(requests=None) -> dict:
+    if requests is None:
+        import requests
+    cfg = _unsloth_cfg()
+    root = cfg["base_url"].removesuffix("/v1")
+    response = requests.get(f"{root}/api/inference/audio/stt/status", timeout=(5, 15))
+    response.raise_for_status()
+    state = response.json().get("audiocpp")
+    if not isinstance(state, dict):
+        raise RuntimeError("O audio.cpp do Unsloth não devolveu o estado STT.")
+    return state
 
 
 def _vps_model_catalog(category: str) -> dict:
@@ -363,6 +387,34 @@ def load_model_for_app(host: str, category: str, model_id: str) -> str:
     catalog = model_catalog(host, category)
     if model_id not in {item["id"] for item in catalog["models"]}:
         raise ValueError("Esse modelo não aparece no catálogo deste host.")
+    if host == "pc" and category == "stt":
+        import requests
+        cfg = _unsloth_cfg()
+        root = cfg["base_url"].removesuffix("/v1")
+        state = _pc_audio_cpp_status(requests)
+        if (state.get("loaded_model") or state.get("loaded_variant")) != model_id:
+            response = requests.post(
+                f"{root}/api/inference/audio/stt/load",
+                json={"model": model_id, "engine": "audiocpp", "device": "auto"},
+                timeout=(5, 260),
+            )
+            response.raise_for_status()
+            result = response.json()
+            if result.get("success") is False or result.get("error"):
+                raise RuntimeError(str(result.get("error") or f"Não foi possível carregar {model_id} no portátil."))
+            deadline = time.monotonic() + 240
+            while True:
+                state = _pc_audio_cpp_status(requests)
+                if (state.get("loaded_model") or state.get("loaded_variant")) == model_id and not state.get("loading"):
+                    break
+                if state.get("error"):
+                    raise RuntimeError(str(state["error"]))
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise RuntimeError(f"O modelo {model_id} não ficou pronto no portátil dentro do prazo.")
+                time.sleep(min(2, remaining))
+        _save_model_selection(host, category, model_id)
+        return "Modelo carregado no portátil."
     if host == "pc":
         result = _mcp_tool("load_model", {"kind": category, "model": model_id, "wait_s": 240})
         _save_model_selection(host, category, model_id)
