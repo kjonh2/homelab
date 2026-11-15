@@ -36,6 +36,7 @@ jobs:
           services/iku-auth/tests
           deploy/windows/test_drisa_main.py
           deploy/windows/test_drisa_voice_gateway.py
+          deploy/windows/test_wake_word_detector.py
           deploy/windows/test_drisa_speech_text.py
           deploy/windows/test_voice_loop_local.py
           deploy/windows/test_drisa_memory.py
