@@ -270,7 +270,12 @@ class DrisaVoiceActivity : AppCompatActivity() {
                 socket = null
                 runOnUiThread {
                     clearAudioResponseTimeout()
-                    setStatus("Falha na ligação: ${t.message ?: "sem resposta"}. Confirma o Tailscale e o endereço da gateway.")
+                    val details = listOfNotNull(
+                        response?.let { "HTTP ${it.code}" },
+                        t.javaClass.simpleName,
+                        t.message?.takeIf { it.isNotBlank() },
+                    ).joinToString(": ")
+                    setStatus("Falha na ligação ($details). Confirma o Tailscale e o endereço da gateway.")
                     updateButtons()
                 }
             }
