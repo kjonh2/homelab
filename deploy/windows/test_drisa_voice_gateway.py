@@ -707,6 +707,47 @@ class AudioPayloadTests(unittest.TestCase):
 
 
 class GatewayAsyncAudioTests(unittest.IsolatedAsyncioTestCase):
+    async def test_text_turn_requires_transcription_policy(self):
+        config = {
+            "allowlist": ["kiko-pc"],
+            "policies": {"kiko-pc": {"transcribe": False, "reply": True}},
+            "unknown": {"transcribe": False, "reply": False},
+        }
+
+        class FakeWebSocket:
+            remote_address = "test"
+
+            def __init__(self):
+                self.messages = iter([
+                    json.dumps({"type": "hello", "device_id": "kiko-pc", "token": "test-token"}),
+                    json.dumps({"type": "text", "text": "Não autorizado."}),
+                ])
+                self.sent = []
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                try:
+                    return next(self.messages)
+                except StopIteration:
+                    raise StopAsyncIteration
+
+            async def send(self, message):
+                self.sent.append(json.loads(message))
+
+        socket = FakeWebSocket()
+        with (
+            patch.object(gateway, "load_config", return_value=config),
+            patch.object(gateway, "load_token", return_value="test-token"),
+            patch.object(gateway, "llm_reply") as llm,
+        ):
+            await asyncio.wait_for(gateway.handle_client(socket), timeout=2)
+
+        self.assertEqual([message["type"] for message in socket.sent], ["auth", "audio_error"])
+        self.assertIn("não está autorizada", socket.sent[-1]["message"])
+        llm.assert_not_called()
+
     async def test_publish_completed_turn_broadcasts_without_recalling_llm(self):
         config = {
             "allowlist": ["kiko-pc"],

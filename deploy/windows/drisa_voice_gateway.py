@@ -68,6 +68,9 @@ async def process_text_turn(ws, device_id, user, text, policy):
     if not text:
         await ws.send(json.dumps({"type": "audio_error", "message": "A transcrição ficou vazia."}, ensure_ascii=False))
         return
+    if not policy.get("transcribe"):
+        await ws.send(json.dumps({"type": "audio_error", "message": "A transcrição não está autorizada para este dispositivo."}, ensure_ascii=False))
+        return
     await asyncio.to_thread(log_to_obsidian, device_id, user, text)
     await broadcast_event(ws, {"type": "transcript", "text": text})
     if not policy.get("reply"):
@@ -119,6 +122,9 @@ async def publish_completed_turn(ws, device_id, user, text, reply, policy):
     reply = reply.strip()[:4000]
     if not text or not reply:
         await ws.send(json.dumps({"type": "audio_error", "message": "Transcrição ou resposta vazia."}, ensure_ascii=False))
+        return
+    if not policy.get("transcribe"):
+        await ws.send(json.dumps({"type": "audio_error", "message": "A transcrição não está autorizada para este dispositivo."}, ensure_ascii=False))
         return
     if not policy.get("reply"):
         await ws.send(json.dumps({"type": "audio_error", "message": "A resposta da Drisa não está autorizada para este dispositivo."}, ensure_ascii=False))
