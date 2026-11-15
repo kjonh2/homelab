@@ -56,9 +56,18 @@ DEFAULT_CONFIG = {
     "port": 8765,
     "stt_engine": "api",                # "api" | "whisper" | "deepgram"
     "unsloth_url": "http://127.0.0.1:8888/v1",
+    "audio_url": "http://127.0.0.1:8767/v1",
+    "stt_url": "http://127.0.0.1:8767/v1",
+    "stt_host": "vps",
     "stt_model": "audio-cpp/audio.cpp-gguf/MOSS-Transcribe-Diarize-GGUF",
     "fallback_stt_model": "audio-cpp/audio.cpp-gguf/Parakeet-TDT-0.6B-v3-GGUF",
+    "fallback_stt_host": "pc",
+    "fallback_stt_url": "http://127.0.0.1:8888/v1",
+    "llm_host": "vps",
     "llm_model": "AtomicChat/LFM3-1.7B-Uncensored-GGUF",
+    "llm_fallback_model": "AtomicChat/LFM3-1.7B-Uncensored-GGUF",
+    "tts_host": "vps",
+    "tts_url": "http://127.0.0.1:8767/v1",
     "tts_model": "kokoro",
     "tts_voice": "pf_dora",
     "allowlist": [],
@@ -126,12 +135,15 @@ def _unsloth_cfg():
 
     local_url = os.environ.get("DRISA_UNSLOTH_URL", cfg.get("unsloth_url", "http://127.0.0.1:8888/v1")).strip().rstrip("/")
     audio_url = os.environ.get("DRISA_AUDIO_URL", cfg.get("audio_url", "")).strip().rstrip("/")
+    homelab_audio_url = os.environ.get("DRISA_HOMELAB_AUDIO_URL", cfg.get("homelab_audio_url", "http://127.0.0.1:8766/v1")).strip().rstrip("/")
+    stt_host = os.environ.get("DRISA_STT_HOST", cfg.get("stt_host", "pc")).strip().lower()
+    tts_host = os.environ.get("DRISA_TTS_HOST", cfg.get("tts_host", "pc")).strip().lower()
     stt_url = os.environ.get("DRISA_STT_URL", cfg.get("stt_url", "")).strip().rstrip("/")
     if not stt_url:
-        stt_url = audio_url if cfg.get("stt_host") == "homelab" else local_url
+        stt_url = audio_url if stt_host in ("homelab", "vps") else local_url
     tts_url = os.environ.get("DRISA_TTS_URL", cfg.get("tts_url", "")).strip().rstrip("/")
     if not tts_url:
-        tts_url = audio_url if cfg.get("tts_host") == "homelab" else local_url
+        tts_url = audio_url if tts_host in ("homelab", "vps") else local_url
 
     def model_id(value, default, endpoint):
         selected = str(value or default).strip()
@@ -141,14 +153,22 @@ def _unsloth_cfg():
         "base_url": local_url,
         "key": os.environ.get("DRISA_UNSLOTH_KEY", cfg.get("unsloth_key", "")).strip(),
         "audio_url": os.environ.get("DRISA_AUDIO_URL", cfg.get("audio_url", "")).strip().rstrip("/"),
+        "homelab_audio_url": homelab_audio_url,
         "audio_key": os.environ.get("DRISA_AUDIO_KEY", cfg.get("audio_key", "")).strip(),
         "stt_url": stt_url,
         "tts_url": tts_url,
+        "stt_host": stt_host,
+        "tts_host": tts_host,
+        "fallback_stt_host": os.environ.get("DRISA_STT_FALLBACK_HOST", cfg.get("fallback_stt_host", "pc")).strip().lower(),
+        "fallback_stt_url": os.environ.get("DRISA_STT_FALLBACK_URL", cfg.get("fallback_stt_url", local_url)).strip().rstrip("/"),
+        "llm_fallback_model": os.environ.get("DRISA_LLM_FALLBACK_MODEL", cfg.get("llm_fallback_model", "AtomicChat/LFM3-1.7B-Uncensored-GGUF")),
+        "tts_fallback_model": os.environ.get("DRISA_TTS_FALLBACK_MODEL", cfg.get("tts_fallback_model", "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF")),
         "stt_key": os.environ.get("DRISA_STT_KEY", cfg.get("stt_key", "")).strip(),
         "tts_key": os.environ.get("DRISA_TTS_KEY", cfg.get("tts_key", "")).strip(),
         "llm_host": llm_host,
         "llm_url": llm_url,
         "llm_key": llm_key,
+        "llm_fallback_url": os.environ.get("DRISA_LLM_FALLBACK_URL", cfg.get("llm_fallback_url", local_url)).strip().rstrip("/"),
         "stt_model": model_id(os.environ.get("DRISA_STT_MODEL", cfg.get("stt_model")), "audio-cpp/audio.cpp-gguf/MOSS-Transcribe-Diarize-GGUF", stt_url),
         "fallback_stt_model": model_id(os.environ.get("DRISA_STT_FALLBACK_MODEL", cfg.get("fallback_stt_model")), "audio-cpp/audio.cpp-gguf/Parakeet-TDT-0.6B-v3-GGUF", stt_url),
         "llm_model": os.environ.get("DRISA_LLM_MODEL", cfg.get("llm_model", "AtomicChat/LFM3-1.7B-Uncensored-GGUF")),
@@ -282,6 +302,39 @@ def _load_pc_llm_model(requests, model_id: str) -> str:
     return "Modelo carregado no portátil."
 
 
+def _ensure_pc_llm_fallback_loaded(requests, model_id: str) -> None:
+    """Load the laptop fallback without changing the VPS-first user selection."""
+    cfg = _unsloth_cfg()
+    if model_id in _pc_loaded_model_ids(requests, cfg):
+        return
+    root = cfg["base_url"].rstrip("/").removesuffix("/v1")
+    headers = {"Authorization": f"Bearer {cfg['key']}"} if cfg.get("key") else {}
+    response = requests.post(
+        f"{root}/api/inference/load", json={"model_path": model_id, "engine": "auto"},
+        headers=headers, timeout=(5, 260),
+    )
+    response.raise_for_status()
+    result = response.json()
+    if result.get("error") or str(result.get("status", "")).lower() in {"error", "failed", "cancelled"}:
+        raise RuntimeError(str(result.get("error") or result.get("message") or "O Unsloth recusou o fallback local."))
+    _wait_for_pc_model(requests, cfg, model_id)
+
+
+def _ensure_pc_tts_fallback_loaded(requests, model_id: str) -> None:
+    """Load laptop Kokoro on demand without changing the VPS-first selection."""
+    cfg = _unsloth_cfg()
+    if model_id in _pc_loaded_model_ids(requests, cfg):
+        return
+    response = requests.post(
+        f"{cfg['base_url'].rstrip('/')}/audio/speech",
+        json={"model": model_id, "input": "Pronto.", "response_format": "wav"},
+        headers={"Authorization": f"Bearer {cfg['key']}"} if cfg.get("key") else {},
+        timeout=(5, 260),
+    )
+    response.raise_for_status()
+    _wait_for_pc_model(requests, cfg, model_id)
+
+
 def _load_pc_tts_model(requests, model_id: str) -> str:
     cfg = _unsloth_cfg()
     if model_id not in _pc_loaded_model_ids(requests, cfg):
@@ -349,7 +402,7 @@ def _ensure_pc_audio_cpp_model(requests, model_id: str) -> None:
 
 def _vps_model_catalog(category: str) -> dict:
     if category != "llm":
-        return {"models": [], "selected": "", "message": "A VPS tem modelos de texto; transcrição e Kokoro estão no portátil."}
+        return _audio_service_model_catalog("vps", category)
     import requests
     key_path = BASE / "iku_lfm3.key"
     if not key_path.exists():
@@ -370,18 +423,16 @@ def _vps_model_catalog(category: str) -> dict:
     return {"models": models, "selected": _selected_model(load_config(), "vps", category), "message": ""}
 
 
-def _homelab_model_catalog(category: str) -> dict:
+def _audio_service_model_catalog(host: str, category: str) -> dict:
     global _HOMELAB_ACTIVE_MODEL
-    if category == "llm":
-        return {"models": [], "selected": "", "message": "O homelab serve áudio; os modelos de texto estão no portátil ou na VPS."}
     allowed = {"stt": {"moss", "parakeet"}, "tts": {"kokoro"}}
     if category not in allowed:
         raise ValueError("Categoria de modelo inválida.")
     import requests
     cfg = _unsloth_cfg()
-    base_url = cfg["audio_url"] or cfg["stt_url"] or cfg["tts_url"]
+    base_url = cfg.get("audio_url", "") if host == "vps" else (cfg.get("homelab_audio_url") or cfg.get("audio_url", ""))
     if not base_url:
-        raise RuntimeError("O endereço do serviço de áudio do homelab não está configurado.")
+        raise RuntimeError(f"O endereço do serviço de áudio de {host} não está configurado.")
     headers = {"Authorization": f"Bearer {cfg['audio_key']}"} if cfg["audio_key"] else {}
     response = requests.get(f"{base_url}/models", headers=headers, timeout=(5, 15))
     response.raise_for_status()
@@ -396,7 +447,11 @@ def _homelab_model_catalog(category: str) -> dict:
         bool(entry_by_id[model_id]["loaded"]) if isinstance(entry_by_id[model_id].get("loaded"), bool)
         else model_id == loaded_model
     )} for model_id in configured]
-    return {"models": models, "selected": _selected_model(load_config(), "homelab", category), "message": ""}
+    return {"models": models, "selected": _selected_model(load_config(), host, category), "message": ""}
+
+
+def _homelab_model_catalog(category: str) -> dict:
+    return _audio_service_model_catalog("homelab", category)
 
 
 def _selected_model(cfg: dict, host: str, category: str) -> str:
@@ -404,12 +459,12 @@ def _selected_model(cfg: dict, host: str, category: str) -> str:
         if cfg.get("llm_host", "pc") != host:
             return ""
         return str(cfg.get("llm_model", ""))
-    if host not in ("pc", "homelab"):
+    if host not in ("pc", "homelab", "vps"):
         return ""
     if cfg.get(f"{category}_host", "pc") != host:
         return ""
     selected = str(cfg.get({"stt": "stt_model", "tts": "tts_model"}.get(category, ""), ""))
-    return _normalize_audio_model(selected, selected) if host == "homelab" else selected
+    return _normalize_audio_model(selected, selected) if host in ("homelab", "vps") else selected
 
 
 def model_catalog(host: str, category: str) -> dict:
@@ -454,15 +509,22 @@ def _save_model_selection(host: str, category: str, model_id: str) -> None:
                 os.environ["DRISA_STT_FALLBACK_MODEL"] = previous_model
             cfg["stt_model"] = model_id
             cfg["stt_host"] = "homelab"
-            cfg["stt_url"] = os.environ.get("DRISA_AUDIO_URL", cfg.get("audio_url", "http://127.0.0.1:8766/v1")).rstrip("/")
+            cfg["stt_url"] = os.environ.get("DRISA_HOMELAB_AUDIO_URL", cfg.get("homelab_audio_url", "http://127.0.0.1:8766/v1")).rstrip("/")
             os.environ["DRISA_STT_MODEL"] = model_id
             os.environ["DRISA_STT_URL"] = cfg["stt_url"]
         elif category == "tts" and host == "homelab":
             cfg["tts_model"] = model_id
             cfg["tts_host"] = "homelab"
-            cfg["tts_url"] = os.environ.get("DRISA_AUDIO_URL", cfg.get("audio_url", "http://127.0.0.1:8766/v1")).rstrip("/")
+            cfg["tts_url"] = os.environ.get("DRISA_HOMELAB_AUDIO_URL", cfg.get("homelab_audio_url", "http://127.0.0.1:8766/v1")).rstrip("/")
             os.environ["DRISA_TTS_MODEL"] = model_id
             os.environ["DRISA_TTS_URL"] = cfg["tts_url"]
+        elif category in ("stt", "tts") and host == "vps":
+            cfg[f"{category}_model"] = model_id
+            cfg[f"{category}_host"] = "vps"
+            cfg[f"{category}_url"] = os.environ.get("DRISA_AUDIO_URL", cfg.get("audio_url", "http://127.0.0.1:8767/v1")).rstrip("/")
+            os.environ[f"DRISA_{category.upper()}_MODEL"] = model_id
+            os.environ[f"DRISA_{category.upper()}_HOST"] = "vps"
+            os.environ[f"DRISA_{category.upper()}_URL"] = cfg[f"{category}_url"]
         else:
             raise ValueError("Esta categoria não pode ser carregada nesse host.")
         temp_path = CONFIG_PATH.with_suffix(".json.tmp")
@@ -512,13 +574,13 @@ def load_model_for_app(host: str, category: str, model_id: str) -> str:
             time.sleep(min(2, remaining))
         _save_model_selection(host, category, model_id)
         return "Modelo carregado na VPS."
-    if host == "homelab" and category in ("stt", "tts"):
+    if host in ("homelab", "vps") and category in ("stt", "tts"):
         package = _HOMELAB_MODEL_PACKAGES.get(model_id)
         if not package or model_id not in {item["id"] for item in catalog["models"]}:
-            raise ValueError("Este modelo não está instalado no homelab.")
+            raise ValueError(f"Este modelo não está instalado em {host}.")
         import requests
         cfg = _unsloth_cfg()
-        base_url = cfg["audio_url"] or cfg["stt_url"] or cfg["tts_url"]
+        base_url = (cfg.get("audio_url", "") if host == "vps" else cfg.get("homelab_audio_url", cfg.get("audio_url", ""))) or cfg.get("stt_url", "") or cfg.get("tts_url", "")
         headers = {"Content-Type": "application/json"}
         if cfg["audio_key"]:
             headers["Authorization"] = f"Bearer {cfg['audio_key']}"
@@ -533,7 +595,7 @@ def load_model_for_app(host: str, category: str, model_id: str) -> str:
             _save_model_selection(host, category, model_id)
             global _HOMELAB_ACTIVE_MODEL
             _HOMELAB_ACTIVE_MODEL = model_id
-        return f"Modelo {model_id} carregado no homelab."
+        return f"Modelo {model_id} carregado em {host}."
     raise ValueError("Esta categoria não pode ser carregada nesse host.")
 
 
@@ -597,22 +659,29 @@ def _ensure_homelab_model(requests, base_url: str, headers: dict, model_id: str)
         raise RuntimeError(str(loaded.get("error") or f"Não foi possível carregar {model_id}."))
 
 
-def unsloth_transcribe(wav_path: Path, model: str | None = None) -> str:
-    """Transcribe with the native audio.cpp endpoint or the OpenAI-compatible API."""
-    is_homelab = False
+def unsloth_transcribe(
+    wav_path: Path,
+    model: str | None = None,
+    *,
+    host: str | None = None,
+    base_url: str | None = None,
+) -> str:
+    """Transcribe on the selected host, using native Unsloth APIs on the PC."""
+    is_audio_service = False
     try:
         import requests
         cfg = _unsloth_cfg()
-        base_url = cfg["stt_url"] or cfg["audio_url"] or cfg["base_url"]
-        key = cfg["stt_key"] or (cfg["audio_key"] if base_url == cfg["audio_url"] else cfg["key"])
+        host = (host or cfg.get("stt_host") or ("homelab" if cfg.get("audio_url") and cfg.get("stt_url") == cfg.get("audio_url") else "pc")).strip().lower()
+        base_url = (base_url or cfg["stt_url"] or cfg["audio_url"] or cfg["base_url"]).rstrip("/")
+        key = cfg["stt_key"] or (cfg["audio_key"] if host in ("homelab", "vps") else cfg["key"])
         files = {"file": (wav_path.name, wav_path.read_bytes(), "audio/wav")}
-        data = {"model": model or cfg["stt_model"]}
+        data = {"model": _normalize_audio_model(model or cfg["stt_model"], model or cfg["stt_model"])}
         headers = {"Authorization": f"Bearer {key}"} if key else {}
         with _AUDIO_REQUEST_LOCK:
-            is_homelab = bool(cfg["audio_url"]) and base_url == cfg["audio_url"]
-            if is_homelab:
+            is_audio_service = host in ("homelab", "vps")
+            if is_audio_service:
                 _ensure_homelab_model(requests, base_url, headers, data["model"])
-            pc_model_id = None if is_homelab else _pc_audio_cpp_model_id(data["model"])
+            pc_model_id = _pc_audio_cpp_model_id(data["model"]) if host == "pc" else None
             if pc_model_id:
                 data["model"] = pc_model_id
                 _ensure_pc_audio_cpp_model(requests, pc_model_id)
@@ -622,17 +691,17 @@ def unsloth_transcribe(wav_path: Path, model: str | None = None) -> str:
                 data["device"] = "auto"
             else:
                 endpoint = f"{base_url}/audio/transcriptions"
-            inference_timeout = 180 if is_homelab and data["model"] == "moss" else 120
+            inference_timeout = 180 if is_audio_service and data["model"] == "moss" else 120
             r = requests.post(endpoint, headers=headers, files=files, data=data,
                               timeout=(5, inference_timeout))
             r.raise_for_status()
-            if is_homelab:
+            if is_audio_service:
                 global _HOMELAB_ACTIVE_MODEL
                 _HOMELAB_ACTIVE_MODEL = data["model"]
         payload = r.json()
         return (payload.get("text") or "").strip()
     except Exception as e:
-        if is_homelab and "requests" in locals():
+        if is_audio_service and "requests" in locals():
             response = getattr(e, "response", None)
             is_busy = isinstance(
                 e,
@@ -643,7 +712,7 @@ def unsloth_transcribe(wav_path: Path, model: str | None = None) -> str:
             )
             if is_busy:
                 raise AudioBackendBusyError(
-                    "Homelab audio inference is busy or its outcome is unknown; fallback suppressed."
+                    f"{host} audio inference is busy or its outcome is unknown."
                 ) from e
         print(f"[unsloth/stt] erro: {e}")
         return ""
@@ -696,21 +765,54 @@ def llm_reply(text: str) -> str:
         cfg = _unsloth_cfg()
         owner = os.environ.get("DRISA_OWNER_NAME", cfg.get("assistant_owner", "utilizador")).strip() or "utilizador"
         system_prompt = f"És a Drisa, assistente pessoal de {owner}. Responde em português de Portugal com uma resposta final, natural e pronta a ser dita em voz alta pelo Kokoro. Limita-te a duas frases curtas e, sempre que possível, a 40 palavras. Não mostres raciocínio, análise, passos internos, etiquetas ou markdown. Se não souberes, dizes."
-        headers = {"Content-Type": "application/json"}
-        if cfg["llm_key"]:
-            headers["Authorization"] = f"Bearer {cfg['llm_key']}"
-        reply = memory_chat(
-            text, system_prompt=system_prompt, base_url=cfg["llm_url"], key=cfg["llm_key"],
-            model=cfg["llm_model"], max_tokens=120, temperature=0.7,
-            spoken_cleaner=prepare_spoken_text,
-        )
-        if reply is None:
-            payload = {"model": cfg["llm_model"], "messages": [
+        primary_url, primary_model, primary_key = cfg["llm_url"], cfg["llm_model"], cfg.get("llm_key", "")
+        reply = None
+        try:
+            reply = memory_chat(
+                text, system_prompt=system_prompt, base_url=primary_url, key=primary_key,
+                model=primary_model, max_tokens=120, temperature=0.7,
+                spoken_cleaner=prepare_spoken_text,
+            )
+        except Exception as e:
+            print(f"[llm] memória PostgreSQL indisponível; vou tentar a API diretamente: {e}")
+
+        def direct_reply(base_url: str, model: str, key: str) -> str:
+            headers = {"Content-Type": "application/json"}
+            if key:
+                headers["Authorization"] = f"Bearer {key}"
+            payload = {"model": model, "messages": [
                 {"role": "system", "content": system_prompt}, {"role": "user", "content": text}],
                 "max_tokens": 120, "temperature": 0.7}
-            r = requests.post(f"{cfg['llm_url']}/chat/completions", json=payload, headers=headers, timeout=90)
-            r.raise_for_status()
-            reply = prepare_spoken_text(r.json()["choices"][0]["message"]["content"])
+            response = requests.post(f"{base_url}/chat/completions", json=payload, headers=headers, timeout=90)
+            response.raise_for_status()
+            return prepare_spoken_text(response.json()["choices"][0]["message"]["content"])
+
+        if not reply:
+            try:
+                reply = direct_reply(primary_url, primary_model, primary_key)
+                if reply:
+                    print("[llm] resposta gerada diretamente pela API principal")
+            except Exception as primary_error:
+                if cfg.get("llm_host", "vps") != "vps":
+                    raise
+                print(f"[llm] VPS indisponível; a tentar fallback no portátil: {primary_error}")
+                fallback_url = cfg.get("llm_fallback_url", cfg.get("base_url", "http://127.0.0.1:8888/v1"))
+                fallback_model = cfg.get("llm_fallback_model", primary_model)
+                fallback_key = cfg.get("key", "")
+                try:
+                    _ensure_pc_llm_fallback_loaded(requests, fallback_model)
+                    reply = memory_chat(
+                        text, system_prompt=system_prompt, base_url=fallback_url, key=fallback_key,
+                        model=fallback_model, max_tokens=120, temperature=0.7,
+                        spoken_cleaner=prepare_spoken_text,
+                    )
+                except Exception as e:
+                    print(f"[llm] memória no fallback do portátil indisponível: {e}")
+                if not reply:
+                    _ensure_pc_llm_fallback_loaded(requests, fallback_model)
+                    reply = direct_reply(fallback_url, fallback_model, fallback_key)
+                if reply:
+                    print("[llm] resposta gerada pelo fallback do portátil")
         if is_utterance_echo(text, reply):
             print("[llm] resposta igual à transcrição ignorada")
             return ""
@@ -721,12 +823,21 @@ def llm_reply(text: str) -> str:
 
 
 def send_to_drisa(text: str, user: str):
-    """Escreve no bridge para o mundo Drisa apanhar (mantém integração com o mundo 3D)."""
+    """Escreve a transcrição no bridge de chat que o mundo 3D consome."""
     try:
-        with open(BRIDGE_TEXT, "a", encoding="utf-8") as f:
-            f.write(f"[Tu]: {text}\n")
+        # The world adds its own [Tu] label and consumes/clears the first line.
+        BRIDGE_TEXT.write_text(text.strip() + "\n", encoding="utf-8")
     except Exception as e:
         print(f"[bridge] erro: {e}")
+
+
+def send_reply_to_world(text: str):
+    """Expose the assistant reply to the Drisa world chat bridge."""
+    try:
+        # The world adds [Drisa] and consumes/clears this file itself.
+        BRIDGE_RESP.write_text(text.strip() + "\n", encoding="utf-8")
+    except Exception as e:
+        print(f"[bridge] erro ao enviar resposta para o mundo: {e}")
 
 
 def read_drisa_reply():
@@ -763,22 +874,35 @@ def tts_kokoro(text: str) -> bytes | None:
                             pass
         import requests
         cfg = _unsloth_cfg()
-        base_url = cfg["tts_url"] or cfg["audio_url"] or cfg["base_url"]
-        key = cfg["tts_key"] or (cfg["audio_key"] if base_url == cfg["audio_url"] else cfg["key"])
-        payload = {"model": cfg["tts_model"], "input": text, "voice": cfg["tts_voice"], "response_format": "wav"}
-        headers = {"Content-Type": "application/json"}
-        if key:
-            headers["Authorization"] = f"Bearer {key}"
-        with _AUDIO_REQUEST_LOCK:
-            is_homelab = bool(cfg["audio_url"]) and base_url == cfg["audio_url"]
-            if is_homelab:
-                _ensure_homelab_model(requests, base_url, headers, payload["model"])
-            r = requests.post(f"{base_url}/audio/speech", json=payload, headers=headers, timeout=(5, 120))
-            r.raise_for_status()
-            if is_homelab:
-                global _HOMELAB_ACTIVE_MODEL
-                _HOMELAB_ACTIVE_MODEL = payload["model"]
-        return r.content
+        base_url = cfg.get("tts_url") or cfg.get("audio_url") or cfg["base_url"]
+        tts_host = cfg.get("tts_host") or ("homelab" if base_url == cfg.get("audio_url") else "pc")
+
+        def request_speech(url: str, model: str, host: str) -> bytes:
+            remote_audio = host in ("homelab", "vps")
+            key = cfg["tts_key"] or (cfg["audio_key"] if remote_audio else cfg["key"])
+            payload = {"model": model, "input": text, "voice": cfg["tts_voice"], "response_format": "wav"}
+            headers = {"Content-Type": "application/json"}
+            if key:
+                headers["Authorization"] = f"Bearer {key}"
+            with _AUDIO_REQUEST_LOCK:
+                if remote_audio:
+                    _ensure_homelab_model(requests, url, headers, model)
+                else:
+                    _ensure_pc_tts_fallback_loaded(requests, model)
+                response = requests.post(f"{url}/audio/speech", json=payload, headers=headers, timeout=(5, 120))
+                response.raise_for_status()
+                if remote_audio:
+                    global _HOMELAB_ACTIVE_MODEL
+                    _HOMELAB_ACTIVE_MODEL = model
+            return response.content
+
+        try:
+            return request_speech(base_url, cfg["tts_model"], tts_host)
+        except Exception as primary_error:
+            if tts_host != "vps":
+                raise
+            print(f"[tts] VPS falhou; a tentar Kokoro no portátil: {primary_error}")
+            return request_speech(cfg["base_url"], cfg["tts_fallback_model"], "pc")
     except Exception as e:
         print(f"[tts] erro: {e}")
         return None
@@ -817,13 +941,30 @@ def transcribe(wav_path: Path) -> str:
     """Motor principal de STT (Unsloth API por defeito)."""
     cfg = load_config()
     api_cfg = _unsloth_cfg()
+    stt_host = api_cfg.get("stt_host", "pc")
+    stt_url = api_cfg.get("stt_url", api_cfg.get("base_url", ""))
     engine = os.environ.get("DRISA_STT_ENGINE", cfg.get("stt_engine", "api")).strip().lower()
     text = ""
     if engine in ("api", "unsloth"):
-        text = unsloth_transcribe(wav_path, api_cfg["stt_model"])
-        if not text and api_cfg["fallback_stt_model"] != api_cfg["stt_model"]:
-            print(f"[stt] modelo principal sem resultado; a tentar {api_cfg['fallback_stt_model']}")
-            text = unsloth_transcribe(wav_path, api_cfg["fallback_stt_model"])
+        try:
+            text = unsloth_transcribe(
+                wav_path, api_cfg.get("stt_model", "moss"), host=stt_host, base_url=stt_url
+            )
+        except AudioBackendBusyError:
+            if stt_host != "vps":
+                raise
+            print("[stt] VPS ocupada; a tentar o fallback Parakeet no portátil")
+        if not text and stt_host == "vps":
+            text = unsloth_transcribe(
+                wav_path, api_cfg.get("fallback_stt_model", "parakeet"),
+                host=api_cfg.get("fallback_stt_host", "pc"),
+                base_url=api_cfg.get("fallback_stt_url", api_cfg.get("base_url", "")),
+            )
+        elif not text and api_cfg.get("fallback_stt_model", "parakeet") != api_cfg.get("stt_model", "moss"):
+            print(f"[stt] modelo principal sem resultado; a tentar {api_cfg.get('fallback_stt_model', 'parakeet')}")
+            text = unsloth_transcribe(
+                wav_path, api_cfg["fallback_stt_model"], host=stt_host, base_url=stt_url
+            )
         if not text and cfg.get("fallback_local_stt", False):
             text = whisper_transcribe(wav_path)
     elif engine == "deepgram":
@@ -964,6 +1105,7 @@ async def handle_client(ws):
                 await report_error("Não consegui preparar a resposta agora.")
                 continue
 
+            await asyncio.to_thread(send_reply_to_world, reply)
             await asyncio.to_thread(log_to_obsidian, device_id, user, reply, "drisa")
             await ws.send(json.dumps({"type": "reply", "text": reply}, ensure_ascii=False))
             await ws.send(json.dumps({

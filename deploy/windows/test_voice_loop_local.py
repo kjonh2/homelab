@@ -15,6 +15,23 @@ import requests
 
 
 class VoiceLoopTests(unittest.TestCase):
+    def test_gaming_stt_uses_vps_first_then_homelab_parakeet_on_failure(self):
+        old = (voice.STT_URL, voice.STT_MODEL, voice.STT_FALLBACK_URL, voice.STT_FALLBACK_MODEL)
+        voice.STT_URL = "http://127.0.0.1:8767/v1"
+        voice.STT_MODEL = "moss"
+        voice.STT_FALLBACK_URL = "http://127.0.0.1:8766/v1"
+        voice.STT_FALLBACK_MODEL = "parakeet"
+        try:
+            with patch.object(voice, "stt_unsloth", side_effect=[requests.ConnectionError("VPS offline"), ("Fallback OK.", 3.0)]) as stt:
+                transcript, elapsed = voice.transcribe_with_fallback("input.wav")
+            self.assertEqual(transcript, "Fallback OK.")
+            self.assertEqual(elapsed, 3.0)
+            self.assertEqual(stt.call_args_list[0].args, ("input.wav",))
+            self.assertEqual(stt.call_args_list[1].args, ("input.wav", "parakeet"))
+            self.assertEqual(stt.call_args_list[1].kwargs["api_url"], "http://127.0.0.1:8766/v1")
+        finally:
+            voice.STT_URL, voice.STT_MODEL, voice.STT_FALLBACK_URL, voice.STT_FALLBACK_MODEL = old
+
     def test_gaming_stt_uses_dedicated_audio_endpoint_and_selected_model(self):
         class ModelsResponse:
             @staticmethod
@@ -127,6 +144,26 @@ class VoiceLoopTests(unittest.TestCase):
                 self.assertEqual(post.call_args.kwargs["json"]["model"], "kokoro")
         finally:
             voice.TTS_URL, voice.TTS_MODEL = old_url, old_model
+
+    def test_gaming_tts_uses_homelab_if_vps_kokoro_fails(self):
+        old = (voice.TTS_URL, voice.TTS_FALLBACK_URL)
+        voice.TTS_URL = "http://127.0.0.1:8767/v1"
+        voice.TTS_FALLBACK_URL = "http://127.0.0.1:8766/v1"
+        try:
+            with tempfile.TemporaryDirectory(prefix="drisa-gaming-tts-fallback-") as directory:
+                wav = Path(directory) / "fallback.wav"
+                wav.write_bytes(b"wav")
+                with (
+                    patch.object(voice, "tts_kokoro", side_effect=[requests.ConnectionError("VPS offline"), str(wav)]) as tts,
+                    patch.object(voice, "tocar") as play,
+                ):
+                    voice.falar("Resposta.")
+                self.assertEqual(tts.call_args_list[0].args, ("Resposta.",))
+                self.assertEqual(tts.call_args_list[1].args, ("Resposta.",))
+                self.assertEqual(tts.call_args_list[1].kwargs["api_url"], "http://127.0.0.1:8766/v1")
+                play.assert_called_once_with(str(wav))
+        finally:
+            voice.TTS_URL, voice.TTS_FALLBACK_URL = old
 
     def test_pipeline_lock_is_released_after_success(self):
         lock = threading.Lock()

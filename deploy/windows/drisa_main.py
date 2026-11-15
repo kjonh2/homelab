@@ -59,6 +59,44 @@ DRISA_HOME = Path(os.environ.get("DRISA_HOME", Path.home() / "workspace" / "dris
 DRISA_HOME.mkdir(parents=True, exist_ok=True)
 
 
+def ensure_local_llm_model_loaded(base_url: str, key: str, model: str) -> None:
+    """Load a local Unsloth text model only after the VPS primary has failed."""
+    import requests
+
+    root = base_url.rstrip("/").removesuffix("/v1")
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
+    response = requests.get(f"{root}/api/inference/loaded-models", headers=headers, timeout=(5, 15))
+    response.raise_for_status()
+    entries = response.json().get("data", [])
+    loaded = {str(item.get("id") or item.get("model") or item.get("model_id"))
+              for item in entries if isinstance(item, dict)
+              and item.get("loaded") is not False
+              and (item.get("id") or item.get("model") or item.get("model_id"))}
+    if model in loaded:
+        return
+    response = requests.post(
+        f"{root}/api/inference/load", headers=headers,
+        json={"model_path": model, "engine": "auto"}, timeout=(5, 260),
+    )
+    response.raise_for_status()
+    result = response.json()
+    if result.get("error") or str(result.get("status", "")).lower() in {"error", "failed", "cancelled"}:
+        raise RuntimeError(str(result.get("error") or result.get("message") or "Unsloth recusou o modelo fallback."))
+    deadline = time.monotonic() + 240
+    while time.monotonic() < deadline:
+        response = requests.get(f"{root}/api/inference/loaded-models", headers=headers, timeout=(5, 15))
+        response.raise_for_status()
+        entries = response.json().get("data", [])
+        loaded = {str(item.get("id") or item.get("model") or item.get("model_id"))
+                  for item in entries if isinstance(item, dict)
+                  and item.get("loaded") is not False
+                  and (item.get("id") or item.get("model") or item.get("model_id"))}
+        if model in loaded:
+            return
+        time.sleep(2)
+    raise TimeoutError(f"O modelo LLM local {model} não ficou pronto dentro do prazo")
+
+
 class DrisaAssistant:
     """
     Main Drisa voice assistant orchestrator
@@ -84,6 +122,7 @@ class DrisaAssistant:
         self.last_wake_word_time = 0
         self.wake_word_cooldown = 2.0  # seconds between wake word detections
         self.processing_lock = threading.Lock()
+        self._ignore_audio_until = 0.0
 
         # Components
         self.audio_processor: Optional[AudioProcessor] = None
@@ -119,6 +158,9 @@ class DrisaAssistant:
                 "max_silence_frames": 60  # ~1.8s of silence before speech ends (60 frames * 30ms)
             },
             "wake_word": {
+                # The always-on microphone uses VAD by default. A wake-word
+                # gate is opt-in so normal speech is not silently discarded.
+                "enabled": False,
                 "phrase": "olá drisa",
                 "sensitivity": 0.7,
                 "language": "pt",
@@ -351,6 +393,9 @@ class DrisaAssistant:
         Args:
             audio_data: Audio signal as numpy array
         """
+        if time.monotonic() < getattr(self, "_ignore_audio_until", 0.0):
+            logger.info("Speech segment ignored during post-TTS echo guard")
+            return
         # Check if Gemini is still processing
         if hasattr(self, '_gemini_processing') and self._gemini_processing:
             logger.info("Gemini still processing, ignoring speech segment")
@@ -362,9 +407,10 @@ class DrisaAssistant:
             logger.debug(f"Speech segment too short ({len(audio_data)} samples), ignoring")
             return
 
-        if not self.wake_word_detector or not self.wake_word_detector.process_audio(audio_data):
-            logger.debug("Speech segment ignored; the offline wake word was not detected")
-            return
+        if self.config.get("wake_word", {}).get("enabled", False):
+            if not self.wake_word_detector or not self.wake_word_detector.process_audio(audio_data):
+                logger.debug("Speech segment ignored; the offline wake word was not detected")
+                return
 
         current_time = time.monotonic()
         fingerprint = hashlib.sha256(np.ascontiguousarray(audio_data).tobytes()).digest()
@@ -588,6 +634,7 @@ class DrisaAssistant:
                                 self.audio_processor.set_muted(False)
                             except Exception:
                                 pass
+                            self._ignore_audio_until = time.monotonic() + 1.5
 
                         if tts_result["success"]:
                             logger.info(f"TTS successful: {tts_result['audio_file_path']}")
@@ -689,6 +736,9 @@ class DrisaAssistant:
 
                 llm_cfg = self.config.get("llm", {})
                 model = os.environ.get("DRISA_LLM_MODEL", llm_cfg.get("model", "AtomicChat/LFM3-1.7B-Uncensored-GGUF"))
+                fallback_model = os.environ.get(
+                    "DRISA_LLM_FALLBACK_MODEL", llm_cfg.get("fallback_model", "AtomicChat/LFM3-1.7B-Uncensored-GGUF")
+                )
                 max_tokens = int(os.environ.get("DRISA_LLM_MAX_TOKENS", llm_cfg.get("max_tokens", 150)))
                 temperature = float(os.environ.get("DRISA_LLM_TEMPERATURE", llm_cfg.get("temperature", 0.7)))
                 local_url = os.environ.get(
@@ -709,9 +759,9 @@ class DrisaAssistant:
 
                 selected_host = os.environ.get("DRISA_LLM_HOST", "pc").strip().lower()
                 providers = (
-                    [("VPS", vps_url, vps_key), ("PC", local_url, local_key)]
+                    [("VPS", vps_url, vps_key, model), ("PC", local_url, local_key, fallback_model)]
                     if selected_host == "vps"
-                    else [("PC", local_url, local_key), ("VPS", vps_url, vps_key)]
+                    else [("PC", local_url, local_key, model), ("VPS", vps_url, vps_key, model)]
                 )
                 system_prompt = (
                     "Tu és a Drisa, uma assistente de voz amigável e entusiasta. "
@@ -725,19 +775,25 @@ class DrisaAssistant:
                 )
                 from drisa_memory import chat as memory_chat
                 seen_urls = set()
-                for provider_name, base_url, key in providers:
+                for provider_name, base_url, key, provider_model in providers:
                     if not base_url or base_url in seen_urls:
                         continue
                     seen_urls.add(base_url)
                     headers = {"Content-Type": "application/json"}
                     if key:
                         headers["Authorization"] = f"Bearer {key}"
+                    if provider_name == "PC" and selected_host == "vps":
+                        try:
+                            ensure_local_llm_model_loaded(base_url, key, provider_model)
+                        except Exception as e:
+                            logger.warning("Local LLM fallback could not be loaded (%s)", type(e).__name__)
+                            continue
 
                     for output_budget in (max_tokens, min(max_tokens * 2, 400)):
                         try:
                             response = memory_chat(
                                 text, system_prompt=system_prompt, base_url=base_url, key=key,
-                                model=model, max_tokens=output_budget, temperature=temperature,
+                                model=provider_model, max_tokens=output_budget, temperature=temperature,
                                 spoken_cleaner=prepare_spoken_text,
                             )
                             if response and not is_utterance_echo(text, response):
@@ -752,7 +808,7 @@ class DrisaAssistant:
                         except Exception as e:
                             logger.warning("Conversation memory failed (%s); trying one-shot LLM", type(e).__name__)
                         payload = _json.dumps({
-                            "model": model,
+                            "model": provider_model,
                             "messages": [
                                 {"role": "system", "content": system_prompt},
                                 {"role": "user", "content": text},
@@ -922,7 +978,10 @@ class DrisaAssistant:
         self.response_thread.start()
 
         logger.info("Drisa Assistant started successfully!")
-        logger.info("Say 'Olá Drisa' to activate voice control")
+        if self.config.get("wake_word", {}).get("enabled", False):
+            logger.info("Say 'Olá Drisa' to activate voice control")
+        else:
+            logger.info("Voice activity detection is active; speech segments will be transcribed")
         return True
 
     def stop(self):

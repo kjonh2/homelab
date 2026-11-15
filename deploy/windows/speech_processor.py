@@ -19,7 +19,7 @@ _AUDIO_CPP_MODEL_IDS = {
 def _normalize_api_model_id(model: str, host: str) -> str:
     """Use the short model IDs exposed by the homelab audio.cpp server."""
     selected = (model or "").strip()
-    if host.strip().lower() in {"homelab", "cluster"}:
+    if host.strip().lower() in {"homelab", "cluster", "vps"}:
         return _AUDIO_CPP_MODEL_IDS.get(selected.casefold(), selected)
     return selected
 
@@ -107,22 +107,25 @@ class SpeechProcessor:
             fallback_model = os.environ.get(
                 "DRISA_STT_FALLBACK_MODEL", "audio-cpp/audio.cpp-gguf/Parakeet-TDT-0.6B-v3-GGUF"
             ).strip()
+            primary_host = os.environ.get("DRISA_STT_HOST", "pc").strip().lower()
+            primary_url = os.environ.get("DRISA_STT_URL", "").strip() or os.environ.get(
+                "DRISA_UNSLOTH_URL", "http://127.0.0.1:8888/v1"
+            ).strip()
             try:
-                result = self._transcribe_api(audio_data, language, primary_model)
+                result = self._transcribe_api(audio_data, language, primary_model, primary_host, primary_url)
                 if result.get("text"):
                     return result
                 logger.warning("STT principal %s sem texto", primary_model)
             except Exception as e:
-                if _audio_request_may_still_be_running(e):
-                    logger.warning(
-                        "STT principal %s ficou pendente no servidor; a omitir fallback para evitar inferências simultâneas",
-                        primary_model,
-                    )
-                    return {"text": "", "confidence": 0.0, "success": False, "error": "audio backend busy"}
                 logger.warning("STT principal %s falhou (%s)", primary_model, e)
-            if fallback_model != primary_model:
+            fallback_host = os.environ.get("DRISA_STT_FALLBACK_HOST", primary_host).strip().lower()
+            fallback_url = os.environ.get("DRISA_STT_FALLBACK_URL", "").strip() or os.environ.get(
+                "DRISA_UNSLOTH_URL", "http://127.0.0.1:8888/v1"
+            ).strip()
+            if fallback_model != primary_model or fallback_host != primary_host or fallback_url != primary_url:
                 try:
-                    result = self._transcribe_api(audio_data, language, fallback_model)
+                    logger.info("A tentar STT de fallback %s em %s", fallback_model, fallback_host)
+                    result = self._transcribe_api(audio_data, language, fallback_model, fallback_host, fallback_url)
                     if result.get("text"):
                         return result
                     logger.warning("STT fallback %s sem texto", fallback_model)
@@ -133,29 +136,44 @@ class SpeechProcessor:
             return self._transcribe_local(audio_data, language)
         return {"text": "", "confidence": 0.0, "success": False, "error": f"{engine} stt failed"}
 
-    def _transcribe_api(self, audio_data: np.ndarray, language: str, model: str = None) -> Dict[str, Any]:
+    def _transcribe_api(self, audio_data: np.ndarray, language: str, model: str = None,
+                        host: str = None, base_url: str = None) -> Dict[str, Any]:
         """STT via servidor unsloth (/v1/audio/transcriptions)."""
         import requests, io, os, time
         import soundfile as sf
-        base = os.environ.get("DRISA_STT_URL", "").strip() or os.environ.get("DRISA_UNSLOTH_URL", "http://localhost:8888/v1")
+        base = (base_url or os.environ.get("DRISA_STT_URL", "").strip()
+                or os.environ.get("DRISA_UNSLOTH_URL", "http://localhost:8888/v1")).rstrip("/")
         if "[IP_ADDRESS]" in base or not base.strip():
             base = "http://localhost:8888/v1"
-        key = os.environ.get("DRISA_UNSLOTH_KEY", "").strip()
+        key = os.environ.get("DRISA_STT_KEY", "").strip()
+        if not key:
+            key = os.environ.get("DRISA_UNSLOTH_KEY", "").strip()
         model = model or os.environ.get(
             "DRISA_STT_MODEL", "audio-cpp/audio.cpp-gguf/MOSS-Transcribe-Diarize-GGUF"
         )
-        stt_host = os.environ.get("DRISA_STT_HOST", "pc").strip().lower()
+        stt_host = (host or os.environ.get("DRISA_STT_HOST", "pc")).strip().lower()
         model = _normalize_api_model_id(model, stt_host)
+        root = base.removesuffix("/v1")
         if stt_host == "pc":
-            self._ensure_stt_model_loaded(model)
+            self._ensure_pc_stt_model_loaded(model, root)
+        elif stt_host in {"vps", "homelab"}:
+            self._ensure_remote_audio_model_loaded(base, model)
         buf = io.BytesIO()
         sf.write(buf, audio_data.astype(np.float32), self.sample_rate, format="WAV", subtype="PCM_16")
         t0 = time.time()
         headers = {}
         if key:
             headers["Authorization"] = f"Bearer {key}"
+        if not key and stt_host in {"vps", "homelab"}:
+            key = os.environ.get("DRISA_AUDIO_KEY", "").strip() or os.environ.get("DRISA_UNSLOTH_KEY", "").strip()
+            if key:
+                headers = {"Authorization": f"Bearer {key}"}
+        endpoint = (
+            f"{root}/api/inference/audio/transcriptions" if stt_host == "pc"
+            else f"{base}/audio/transcriptions"
+        )
         r = requests.post(
-            f"{base}/audio/transcriptions",
+            endpoint,
             headers=headers,
             files={"file": ("chunk.wav", buf.getvalue(), "audio/wav")},
             data={"model": model, "language": language},
@@ -169,6 +187,38 @@ class SpeechProcessor:
         if text:
             return {"text": text, "confidence": 1.0, "success": True}
         return {"text": "", "confidence": 0.0, "success": False, "error": "no speech detected"}
+
+    def _ensure_pc_stt_model_loaded(self, model: str, root: str) -> None:
+        """Load a downloaded local audio.cpp STT model through Unsloth Studio."""
+        import requests
+
+        status_url = f"{root}/api/inference/audio/stt/status"
+
+        def read_status():
+            response = requests.get(status_url, timeout=(5, 15))
+            response.raise_for_status()
+            state = response.json().get("audiocpp")
+            if not isinstance(state, dict):
+                raise RuntimeError("Unsloth não devolveu o estado do audio.cpp local")
+            return state
+
+        state = read_status()
+        if (state.get("loaded_model") or state.get("loaded_variant")) == model and not state.get("loading"):
+            return
+        response = requests.post(
+            f"{root}/api/inference/audio/stt/load",
+            json={"model": model, "engine": "audiocpp", "device": "auto"}, timeout=(5, 260),
+        )
+        response.raise_for_status()
+        deadline = time.monotonic() + 240
+        while time.monotonic() < deadline:
+            state = read_status()
+            if (state.get("loaded_model") or state.get("loaded_variant")) == model and not state.get("loading"):
+                return
+            if state.get("error"):
+                raise RuntimeError(str(state["error"]))
+            time.sleep(2)
+        raise TimeoutError(f"O modelo STT local {model} não ficou pronto dentro do prazo")
 
     def _ensure_stt_model_loaded(self, model: str) -> None:
         """Load the requested local Unsloth STT model only when it is not resident."""
@@ -420,25 +470,48 @@ class SpeechProcessor:
         import requests, io, os, time
         import sounddevice as sd
         import soundfile as sf
-        base = os.environ.get("DRISA_TTS_URL", "").strip() or os.environ.get("DRISA_UNSLOTH_URL", "http://localhost:8888/v1")
-        if "[IP_ADDRESS]" in base or not base.strip():
-            base = "http://localhost:8888/v1"
-        key = os.environ.get("DRISA_UNSLOTH_KEY", "").strip()
-        model = os.environ.get("DRISA_TTS_MODEL", "kokoro")
-        if os.environ.get("DRISA_TTS_HOST", "pc").strip().lower() != "pc":
-            self._ensure_remote_audio_model_loaded(base.rstrip("/"), model)
         voice = os.environ.get("DRISA_TTS_VOICE", "pf_dora")
-        t0 = time.time()
-        headers = {}
-        if key:
-            headers["Authorization"] = f"Bearer {key}"
-        r = requests.post(
-            f"{base}/audio/speech",
-            headers=headers,
-            json={"model": model, "input": text, "voice": voice, "response_format": "wav"},
-            timeout=120,
+        primary_url = os.environ.get("DRISA_TTS_URL", "").strip() or os.environ.get(
+            "DRISA_UNSLOTH_URL", "http://localhost:8888/v1"
         )
-        r.raise_for_status()
+        if "[IP_ADDRESS]" in primary_url or not primary_url.strip():
+            primary_url = "http://localhost:8888/v1"
+        primary_host = os.environ.get("DRISA_TTS_HOST", "pc").strip().lower()
+        primary_model = os.environ.get("DRISA_TTS_MODEL", "kokoro")
+        primary_key = os.environ.get("DRISA_TTS_KEY", "").strip()
+        if not primary_key:
+            primary_key = os.environ.get("DRISA_AUDIO_KEY", "").strip() if primary_host in {"vps", "homelab"} else os.environ.get("DRISA_UNSLOTH_KEY", "").strip()
+
+        def request_audio(base: str, model: str, host: str, key: str):
+            base = base.rstrip("/")
+            if host != "pc":
+                self._ensure_remote_audio_model_loaded(base, model)
+            headers = {"Authorization": f"Bearer {key}"} if key else {}
+            response = requests.post(
+                f"{base}/audio/speech", headers=headers,
+                json={"model": model, "input": text, "voice": voice, "response_format": "wav"},
+                timeout=120,
+            )
+            response.raise_for_status()
+            return response
+
+        t0 = time.time()
+        try:
+            r = request_audio(primary_url, primary_model, primary_host, primary_key)
+            model = primary_model
+        except Exception as primary_error:
+            if primary_host != "vps":
+                raise
+            fallback_url = os.environ.get("DRISA_TTS_FALLBACK_URL", "").strip() or os.environ.get(
+                "DRISA_UNSLOTH_URL", "http://127.0.0.1:8888/v1"
+            ).strip()
+            fallback_model = os.environ.get(
+                "DRISA_TTS_FALLBACK_MODEL", "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF"
+            ).strip()
+            fallback_key = os.environ.get("DRISA_UNSLOTH_KEY", "").strip()
+            logger.warning("TTS VPS failed (%s); trying laptop Kokoro fallback", primary_error)
+            r = request_audio(fallback_url, fallback_model, "pc", fallback_key)
+            model = fallback_model
         data, sr = sf.read(io.BytesIO(r.content), dtype="float32")
         sd.play(data, sr)
         sd.wait()

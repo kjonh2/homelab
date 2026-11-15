@@ -1,22 +1,22 @@
 # Drisa audio service and laptop Gaming mode
 
-Last checked: 2026-11-15. The Redmi is connected over USB ADB and Drisa is in the foreground. The installed app is still version 1.01.0; the newer diagnostic APK has not been installed because MIUI rejected the ADB update. The phone's WSS authentication was verified earlier, but a fresh microphone-to-response test is still outstanding.
+Last checked: 2026-11-15. Redmi is online on Tailscale, but `adb devices` is empty in the current session. Its earlier WSS authentication remains verified; a fresh phone microphone/playback test is outstanding.
 
 ## Intended layout
 
-- The VPS remains the K3s control plane and serves the LFM text model, PostgreSQL conversation memory, Iku portal, Nextcloud, and n8n.
-- The `homelab` worker runs a private `audio.cpp` service for MOSS transcription, Parakeet fallback, and Kokoro speech generation. Its PVC uses the homelab node's local-path storage; it is not replicated to the VPS.
-- Only one audio model is kept loaded at a time on the J3710 worker. This follows an OOM kill during concurrent model residency; the pod has a 4 GiB limit and the observed MOSS+Parakeet working set previously approached it.
-- The laptop's Drisa gateway sends LLM prompts to the selected text-model host. Its STT and TTS URLs are configured separately, so transcribed text goes to LFM and spoken output goes to Kokoro.
-- The laptop reaches the cluster audio Service through an SSH local forward bound to `127.0.0.1:8766`. The Kubernetes Service is ClusterIP-only; neither model API nor its model-management endpoint is published to the Internet or LAN.
-- The API-only server enables dynamic model loading so Iku can load a selected installed package. Its WebUI stays disabled. The gateway only allows the three installed package IDs; Kubernetes ingress policy restricts the service to the homelab host-side path used by the SSH forward.
+- The VPS remains the K3s control plane and serves the selected LFM3 model, PostgreSQL conversation memory, Iku portal, Nextcloud, n8n, and a separate private audio.cpp service.
+- Normal-mode defaults are VPS first for LFM, MOSS transcription, and Kokoro speech. The laptop uses local LFM3, Parakeet, and Kokoro as fallbacks if the VPS route fails or is busy; the saved host selection stays VPS first.
+- The VPS audio service only advertises MOSS and Kokoro and allows one loaded audio model at a time. Loading Parakeet there caused an OOM kill; it is deliberately left on the laptop fallback. MOSS and Kokoro are switched as requests arrive, while the LFM service is separate.
+- The homelab still has its own audio.cpp service as another cluster worker/fallback. Its PVC uses the homelab node's local-path storage; it is not replicated to the VPS.
+- The laptop reaches the VPS audio Service through a Tailscale SSH forward bound to `127.0.0.1:8767`; the older homelab forward uses `127.0.0.1:8766`. Both Kubernetes Services are ClusterIP-only; neither model API nor its model-management endpoint is public.
+- The audio server enables dynamic loading only for installed model IDs. Its WebUI stays disabled. NetworkPolicy restricts access to the cluster path used by the private SSH forwards.
 - Kokoro needs the eSpeak-ng runtime library and voice data. A non-root init container extracts Ubuntu's signed `libespeak-ng1`, `libpcaudio0`, `libsonic0`, and `espeak-ng-data` packages into the service PVC. The model server reads them from that PVC.
 
 ## Laptop Gaming mode
 
-The watchdog reads `drisa_mode.txt`. In Gaming mode it stops the laptop's local model server and the Drisa 3D world, keeps the authenticated gateway and microphone listener available, and routes MOSS/Parakeet/Kokoro requests through the homelab tunnel. LFM remains on the selected text host (currently the VPS). Returning to normal mode restores the normal voice listener and leaves the local model server alone.
+The watchdog reads `drisa_mode.txt`. In Gaming mode it stops the laptop's local model server and the Drisa 3D world, keeps the authenticated gateway and microphone listener available, and routes MOSS/Kokoro requests through the VPS tunnel. If VPS audio inference fails, transcription and speech use the homelab service through its loopback tunnel; LFM remains VPS-only while the laptop server is stopped. Returning to normal mode restores the normal voice listener and leaves the local model server alone.
 
-This is an audio-serving fallback, not a full VPS outage plan. If the VPS LFM endpoint is offline, the conversation cannot produce an LLM reply unless a separate LLM fallback is configured. If the homelab is offline, remote STT/TTS is unavailable; Gaming mode deliberately does not turn on local model serving.
+Normal mode has VPS-to-laptop fallbacks for text generation, transcription, and speech synthesis. Gaming mode deliberately stops local model serving, so text generation has no laptop fallback while gaming; MOSS/Kokoro can use the homelab audio service if the VPS is unavailable.
 
 ## Check the deployed service
 
@@ -27,15 +27,15 @@ sudo k3s kubectl -n iku get deploy,pods,svc,pvc -l app.kubernetes.io/name=drisa-
 sudo k3s kubectl -n iku logs deploy/drisa-audio -c server --tail=100
 ```
 
-From the laptop, confirm the local forward is loopback-only, then check the API:
+From the laptop, confirm the local forward is loopback-only, then check the VPS audio API:
 
 ```powershell
-Get-NetTCPConnection -State Listen -LocalAddress 127.0.0.1 -LocalPort 8766
-Invoke-RestMethod http://127.0.0.1:8766/health
-Invoke-RestMethod http://127.0.0.1:8766/v1/models
+Get-NetTCPConnection -State Listen -LocalAddress 127.0.0.1 -LocalPort 8767
+Invoke-RestMethod http://127.0.0.1:8767/health
+Invoke-RestMethod http://127.0.0.1:8767/v1/models
 ```
 
-`/health` confirms the server is ready but does not prove a model has loaded. `/v1/models` reports the API IDs `moss`, `parakeet`, and `kokoro`. Keep these IDs in the app and gateway; the package names are only used for model installation/loading.
+`/health` confirms the server is ready but does not prove a model has loaded. The VPS `/v1/models` catalog should contain only `moss` and `kokoro`; the homelab catalog also contains `parakeet`. Keep short API IDs in the app and gateway; package names are only used for model installation/loading.
 
 ## Validation results and limits
 
@@ -64,6 +64,19 @@ Live check at 2026-11-15 02:48 Europe/Paris: the phone remained on app version 1
 Live WSS model-catalog verification later on 2026-11-15: the laptop gateway now reads its model inventory from Unsloth's native APIs rather than Docker MCP, whose local resolver is degraded. Authenticated WSS catalog requests returned 13 installed PC text models (including local LFM3 and Omni), one PC TTS model (Kokoro, loaded), three VPS LFM3 models (uncensored loaded), two homelab STT models (MOSS selected; Parakeet loaded), and homelab Kokoro (available, unloaded). This verifies the gateway protocol and model state sent to the Android UI; the phone has not yet been refreshed on-screen, and this is not a microphone/playback test. PC LLM loading uses `/api/inference/load`; PC TTS loading performs a short discarded speech request because Unsloth exposes no standalone TTS-load route.
 
 Laptop mode recheck on 2026-11-14: `drisa_mode.txt` is absent, so the laptop is in normal mode; the `Drisa Watchdog` task is Running. The gateway (`127.0.0.1:8765`) and Gaming-mode audio SSH forward (`127.0.0.1:8766`) are listening. Unsloth listens on TCP/8888 across loopback, LAN, and Tailscale interface addresses, but the enabled inbound Windows Firewall block covers RFC1918, link-local, and Tailscale IPv4/IPv6 ranges. A local TCP connect to `127.0.0.1:8888` succeeded; a connect from the VPS over Tailscale to the laptop Tailscale address timed out, consistent with the inbound block. Loopback remains available for the local gateway. Do not remove the rule just because Unsloth continues to bind non-loopback interfaces.
+
+## VPS-first routing redeploy, 2026-11-15
+
+- The VPS audio Deployment now omits Parakeet from its model catalog and install init containers. Its current API catalog is `moss` and `kokoro`; MOSS was loaded and transcribed a synthetic Kokoro WAV successfully in 24.6 seconds. Kokoro speech generation returned a valid 110,444-byte WAV in 5.6 seconds. The synthetic phrase is an integration sample, not a real microphone test.
+- A 404 exposed a route mismatch in the laptop's always-on mic listener. Its remote audio.cpp calls now use `/v1/audio/transcriptions`, while local Unsloth Studio uses `/api/inference/audio/transcriptions`. The listener has been restarted with this correction.
+- The active `gateway_config.json` selects VPS for STT, LLM, and TTS; Parakeet, LFM3-1.7B-Uncensored, and Kokoro are configured as laptop fallbacks. The watchdog keeps the VPS audio forward on loopback port 8767 and passes primary and fallback routes to the normal-mode listener. Gaming mode uses homelab Parakeet/Kokoro only if VPS audio inference fails.
+- Normal-mode desktop and Android gateway code now attempts the laptop fallback after VPS STT/LLM/TTS failure, loading local fallbacks on demand without changing the saved VPS-first selection. Gaming mode continues to stop the laptop model server, so local inference fallback is unavailable while that mode is active.
+- Validation: 58 Windows Python tests passed, the Gaming route test and watchdog PowerShell parser passed, and the VPS audio health/model endpoints returned successfully. The VPS audio container limit is 3584 MiB with one resident model. A restart ended `OOMKilled` (exit 137) while Kokoro inference was in progress; after restart the pod returned Ready and reported about 2822 MiB. During the later live check the VPS node reached 6307 MiB (81%) used, so do not raise audio limits or run another model concurrently without first checking the active load. No NVIDIA GPU was detected.
+- The Redmi is online on Tailscale but is not attached to ADB now. Its authenticated WSS session was verified earlier, but this redeploy has not yet been checked with a real phone recording or phone playback. The desktop listener is running; a new spoken exchange is still needed to prove capture through final audio end to end.
+
+At 2026-11-15 04:52 Europe/Paris, deployed the anti-echo guard to the laptop's normal-mode listener and restarted it through the `Drisa Watchdog` task. The guard discards completed mic segments for 1.5 seconds after Kokoro playback. The updated listener is running; both laptop and Redmi still need a user-spoken exchange to verify final audio end to end.
+
+Gaming routing recheck on 2026-11-15: the active laptop configuration points STT/LLM/TTS at the VPS. Gaming previously tried a Parakeet fallback on the VPS even though the VPS catalog intentionally excludes Parakeet. The Gaming listener now routes failed VPS STT/TTS requests to Parakeet/Kokoro on the homelab through the existing private tunnel. This was verified by 58 Python tests, the PowerShell Gaming-route assertion, and copying the updated listener/watchdog files into the runtime. Text generation stays VPS-only in Gaming mode because the laptop model server is stopped; an end-to-end spoken Gaming test remains outstanding.
 
 ## Watchdog and intermittent console windows
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# Drisa Voice Loop — portátil do Kiko (unsloth: STT+LLM+TTS API)
-# mic -> VAD (webrtcvad) -> Unsloth STT -> Unsloth LLM -> Unsloth Kokoro -> sounddevice
+# Drisa Voice Loop — portátil do Kiko (VPS primary; homelab audio fallback)
+# mic -> VAD (webrtcvad) -> VPS STT/LLM/TTS -> homelab STT/TTS fallback -> sounddevice
 # Servidor HTTP :8111 -> widget indicador (Hermes chat) + heartbeat do homelab
 import os, sys, time, json, subprocess, tempfile, threading, wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -30,9 +30,12 @@ if not KEY:
     except OSError:
         KEY = ""
 BASE_URL = os.environ.get("DRISA_UNSLOTH_URL", "http://localhost:8888/v1").rstrip("/")
-AUDIO_URL = os.environ.get("DRISA_AUDIO_URL", "http://127.0.0.1:8766/v1").rstrip("/")
+AUDIO_URL = os.environ.get("DRISA_AUDIO_URL", "http://127.0.0.1:8767/v1").rstrip("/")
+HOMELAB_AUDIO_URL = os.environ.get("DRISA_HOMELAB_AUDIO_URL", "http://127.0.0.1:8766/v1").rstrip("/")
 STT_URL = os.environ.get("DRISA_STT_URL", AUDIO_URL).rstrip("/")
+STT_FALLBACK_URL = os.environ.get("DRISA_STT_FALLBACK_URL", HOMELAB_AUDIO_URL).rstrip("/")
 TTS_URL = os.environ.get("DRISA_TTS_URL", AUDIO_URL).rstrip("/")
+TTS_FALLBACK_URL = os.environ.get("DRISA_TTS_FALLBACK_URL", HOMELAB_AUDIO_URL).rstrip("/")
 AUDIO_KEY = os.environ.get("DRISA_AUDIO_KEY", "").strip()
 _AUDIO_MODELS = {
     "moss": {"package_id": "moss_transcribe_diarize_q4_k", "task": "asr"},
@@ -149,7 +152,7 @@ _lock = threading.Lock()
 _audio_request_lock = threading.RLock()
 
 def ensure_audio_model(api_url, model, headers):
-    if api_url.rstrip("/") != AUDIO_URL or model not in _AUDIO_MODELS:
+    if api_url.rstrip("/") not in {AUDIO_URL, HOMELAB_AUDIO_URL} or model not in _AUDIO_MODELS:
         return
     response = requests.get(f"{api_url}/models", headers=headers, timeout=(5, 15))
     response.raise_for_status()
@@ -181,7 +184,7 @@ def stt_whisper_cpp(wav_path):
     log(f"STT local {time.time()-t0:.1f}s -> {txt!r}")
     return txt, time.time()-t0
 
-def stt_unsloth(wav_path, model=None):
+def stt_unsloth(wav_path, model=None, api_url=None):
     t0 = time.time()
     headers = {}
     if AUDIO_KEY:
@@ -190,15 +193,35 @@ def stt_unsloth(wav_path, model=None):
         data = f.read()
     files = {"file": (os.path.basename(wav_path), data, "audio/wav")}
     selected_model = model or STT_MODEL
+    selected_url = (api_url or STT_URL).rstrip("/")
     with _audio_request_lock:
-        ensure_audio_model(STT_URL, selected_model, headers)
-        timeout = (5, 30 if STT_URL == AUDIO_URL and selected_model == "moss" else 120)
-        r = requests.post(f"{STT_URL}/audio/transcriptions", headers=headers, files=files,
+        ensure_audio_model(selected_url, selected_model, headers)
+        timeout = (5, 30 if selected_url == AUDIO_URL and selected_model == "moss" else 120)
+        r = requests.post(f"{selected_url}/audio/transcriptions", headers=headers, files=files,
                           data={"model": selected_model}, timeout=timeout)
         r.raise_for_status()
     txt = (r.json().get("text") or "").strip()
     log(f"STT audio service {time.time()-t0:.1f}s -> {txt!r}")
     return txt, time.time()-t0
+
+def transcribe_with_fallback(wav_path):
+    try:
+        text, elapsed = stt_unsloth(wav_path)
+    except Exception as exc:
+        log(f"STT VPS falhou ({type(exc).__name__}); a tentar o fallback do homelab")
+        text, elapsed = "", 0.0
+    if text or STT_FALLBACK_MODEL == STT_MODEL:
+        return text, elapsed
+    try:
+        fallback_text, fallback_elapsed = stt_unsloth(
+            wav_path, STT_FALLBACK_MODEL, api_url=STT_FALLBACK_URL
+        )
+        log(f"STT fallback Parakeet {fallback_elapsed:.1f}s")
+        return fallback_text, fallback_elapsed
+    except Exception as exc:
+        log(f"STT fallback Parakeet falhou ({type(exc).__name__})")
+        return "", 0.0
+
 def llm(texto):
     t0 = time.time()
     headers = {"Content-Type": "application/json"}
@@ -214,14 +237,15 @@ def llm(texto):
     log(f"LLM {time.time()-t0:.1f}s -> {resp[:100]!r}")
     return resp
 
-def tts_kokoro(texto):
+def tts_kokoro(texto, api_url=None):
     t0 = time.time()
     headers = {"Content-Type": "application/json"}
     if AUDIO_KEY:
         headers["Authorization"] = f"Bearer {AUDIO_KEY}"
+    selected_url = (api_url or TTS_URL).rstrip("/")
     with _audio_request_lock:
-        ensure_audio_model(TTS_URL, TTS_MODEL, headers)
-        r = requests.post(f"{TTS_URL}/audio/speech",
+        ensure_audio_model(selected_url, TTS_MODEL, headers)
+        r = requests.post(f"{selected_url}/audio/speech",
             headers=headers,
             json={"model": TTS_MODEL, "input": texto, "voice": TTS_VOICE, "response_format": "wav"},
             timeout=(5, 120))
@@ -257,7 +281,13 @@ def falar(texto):
         finally:
             if text_path and os.path.exists(text_path):
                 os.remove(text_path)
-    wav = tts_kokoro(texto)
+    try:
+        wav = tts_kokoro(texto)
+    except Exception as primary_error:
+        if TTS_FALLBACK_URL == TTS_URL:
+            raise
+        log(f"Kokoro VPS falhou ({type(primary_error).__name__}); a tentar fallback do homelab")
+        wav = tts_kokoro(texto, api_url=TTS_FALLBACK_URL)
     try:
         tocar(wav)
     finally:
@@ -285,18 +315,7 @@ def pipeline(samples, mic_name):
                 log(f"STT local falhou: {e}")
                 txt, t_stt = "", 0.0
         else:
-            try:
-                txt, t_stt = stt_unsloth(wav_path)
-            except Exception as e:
-                log(f"STT unsloth falhou: {e}")
-                txt, t_stt = "", 0.0
-            if not txt and STT_FALLBACK_MODEL != STT_MODEL:
-                try:
-                    txt, t_stt = stt_unsloth(wav_path, STT_FALLBACK_MODEL)
-                    log(f"STT fallback Parakeet {t_stt:.1f}s")
-                except Exception as e:
-                    log(f"STT fallback Parakeet falhou: {e}")
-                    txt, t_stt = "", 0.0
+            txt, t_stt = transcribe_with_fallback(wav_path)
         if not txt and os.environ.get("DRISA_STT_FALLBACK", "").strip().lower() in ("1", "true", "yes", "local", "whisper"):
             txt, t_stt = stt_whisper_cpp(wav_path)
         if filtro(txt):

@@ -3,9 +3,11 @@ function Set-DrisaGamingEnvironment {
     $env:DRISA_STT_MODEL = 'moss'
     $env:DRISA_STT_FALLBACK_MODEL = 'parakeet'
     $env:DRISA_STT_URL = $env:DRISA_AUDIO_URL
+    $env:DRISA_STT_FALLBACK_URL = $env:DRISA_HOMELAB_AUDIO_URL
     $env:DRISA_TTS_ENGINE = 'api'
     $env:DRISA_TTS_MODEL = 'kokoro'
     $env:DRISA_TTS_URL = $env:DRISA_AUDIO_URL
+    $env:DRISA_TTS_FALLBACK_URL = $env:DRISA_HOMELAB_AUDIO_URL
     $env:DRISA_TTS_VOICE = 'pf_dora'
     $env:DRISA_LLM_URL = 'https://vps-4e5174e4.tail2931da.ts.net:8445/v1'
     $env:DRISA_LLM_HOST = 'vps'

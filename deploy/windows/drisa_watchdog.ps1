@@ -32,20 +32,28 @@ function Set-DrisaRuntimeEnvironment([bool]$GamingMode) {
     $env:DRISA_HOME = $drisaDir
     $env:DRISA_VAULT_PATH = Join-Path $env:USERPROFILE 'Documents\Obsidian Vault\Drisa\Voice Gateway'
     $env:DRISA_UNSLOTH_URL = if ($config.unsloth_url) { $config.unsloth_url } else { 'http://127.0.0.1:8888/v1' }
-    $env:DRISA_AUDIO_URL = if ($config.audio_url) { $config.audio_url } else { 'http://127.0.0.1:8766/v1' }
+    $env:DRISA_AUDIO_URL = if ($config.audio_url) { $config.audio_url } else { 'http://127.0.0.1:8767/v1' }
+    $env:DRISA_HOMELAB_AUDIO_URL = if ($config.homelab_audio_url) { $config.homelab_audio_url } else { 'http://127.0.0.1:8766/v1' }
     $env:DRISA_STT_ENGINE = if ($config.stt_engine) { $config.stt_engine } else { 'api' }
     $env:DRISA_TTS_ENGINE = if ($config.tts_engine) { $config.tts_engine } else { 'api' }
     $env:DRISA_STT_MODEL = if ($config.stt_model) { $config.stt_model } else { 'moss' }
     $env:DRISA_STT_FALLBACK_MODEL = if ($config.fallback_stt_model) { $config.fallback_stt_model } else { 'parakeet' }
-    $env:DRISA_STT_URL = if ($config.stt_url) { $config.stt_url } elseif ($config.stt_host -eq 'homelab') { $env:DRISA_AUDIO_URL } else { $env:DRISA_UNSLOTH_URL }
     $env:DRISA_STT_HOST = if ($config.stt_host) { $config.stt_host } else { 'pc' }
+    $env:DRISA_STT_FALLBACK_HOST = if ($config.fallback_stt_host) { $config.fallback_stt_host } else { 'pc' }
+    $env:DRISA_STT_FALLBACK_URL = if ($config.fallback_stt_url) { $config.fallback_stt_url } else { $env:DRISA_UNSLOTH_URL }
+    $env:DRISA_STT_URL = if ($config.stt_url) { $config.stt_url } elseif ($env:DRISA_STT_HOST -in @('homelab', 'vps')) { $env:DRISA_AUDIO_URL } else { $env:DRISA_UNSLOTH_URL }
     $env:DRISA_LLM_MODEL = if ($config.llm_model) { $config.llm_model } else { 'AtomicChat/LFM3-1.7B-Uncensored-GGUF' }
     $env:DRISA_LLM_HOST = if ($config.llm_host) { $config.llm_host } else { 'pc' }
     if ($config.llm_url) { $env:DRISA_LLM_URL = $config.llm_url }
+    $env:DRISA_LLM_FALLBACK_URL = if ($config.llm_fallback_url) { $config.llm_fallback_url } else { $env:DRISA_UNSLOTH_URL }
+    $env:DRISA_LLM_FALLBACK_MODEL = if ($config.llm_fallback_model) { $config.llm_fallback_model } else { $env:DRISA_LLM_MODEL }
     $env:DRISA_TTS_MODEL = if ($config.tts_model) { $config.tts_model } else { 'kokoro' }
-    $env:DRISA_TTS_URL = if ($config.tts_url) { $config.tts_url } elseif ($config.tts_host -eq 'homelab') { $env:DRISA_AUDIO_URL } else { $env:DRISA_UNSLOTH_URL }
     $env:DRISA_TTS_HOST = if ($config.tts_host) { $config.tts_host } else { 'pc' }
+    $env:DRISA_TTS_URL = if ($config.tts_url) { $config.tts_url } elseif ($env:DRISA_TTS_HOST -in @('homelab', 'vps')) { $env:DRISA_AUDIO_URL } else { $env:DRISA_UNSLOTH_URL }
+    $env:DRISA_TTS_FALLBACK_MODEL = if ($config.tts_fallback_model) { $config.tts_fallback_model } else { 'audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF' }
+    $env:DRISA_TTS_FALLBACK_URL = if ($config.tts_fallback_url) { $config.tts_fallback_url } else { $env:DRISA_UNSLOTH_URL }
     $env:DRISA_TTS_VOICE = if ($config.tts_voice) { $config.tts_voice } else { 'pf_dora' }
+    $env:DRISA_AUDIO_KEY = if ($config.audio_key) { $config.audio_key } else { '' }
 
     $keyPath = Join-Path $drisaDir 'unsloth.key'
     if (Test-Path -LiteralPath $keyPath) {
@@ -99,6 +107,47 @@ function Ensure-DrisaAudioTunnel {
         }
     } catch {
         Write-DrisaWatchdogLog "audio tunnel error: $($_.Exception.Message)"
+    }
+}
+
+function Ensure-DrisaVpsAudioTunnel {
+    $listenAddress = '127.0.0.1'
+    $listenPort = 8767
+    $forward = '127.0.0.1:8767:10.43.113.250:8080'
+    $sshTarget = 'vps-4e5174e4'
+    $tailscaleExe = Join-Path $env:ProgramFiles 'Tailscale\tailscale.exe'
+    if (-not (Test-Path -LiteralPath $tailscaleExe)) {
+        Write-DrisaWatchdogLog 'VPS audio tunnel skipped: Tailscale CLI not found'
+        return
+    }
+    $matching = @(Get-CimInstance Win32_Process -Filter "Name = 'ssh.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { ([string]$_.CommandLine).Contains($forward) -and ([string]$_.CommandLine).Contains($sshTarget) })
+    $listener = Get-NetTCPConnection -State Listen -LocalAddress $listenAddress -LocalPort $listenPort -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($listener -and @($matching | Where-Object { $_.ProcessId -eq $listener.OwningProcess }).Count -gt 0) { return }
+    if ($listener) {
+        Write-DrisaWatchdogLog "VPS audio tunnel skipped: $listenAddress`:$listenPort is owned by another process"
+        return
+    }
+    if ($matching.Count -gt 0) { return }
+    try {
+        $started = Start-Process -FilePath $tailscaleExe -ArgumentList @(
+            'ssh', 'ubuntu@vps-4e5174e4', '-N', '-o', 'ExitOnForwardFailure=yes',
+            '-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=30', '-o', 'ServerAliveCountMax=3',
+            '-L', $forward
+        ) -WindowStyle Hidden -PassThru
+        Start-Sleep -Milliseconds 1200
+        $listener = Get-NetTCPConnection -State Listen -LocalAddress $listenAddress -LocalPort $listenPort -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        $matching = @(Get-CimInstance Win32_Process -Filter "Name = 'ssh.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { ([string]$_.CommandLine).Contains($forward) -and ([string]$_.CommandLine).Contains($sshTarget) })
+        if ($listener -and @($matching | Where-Object { $_.ProcessId -eq $listener.OwningProcess }).Count -gt 0) {
+            Write-DrisaWatchdogLog "VPS audio tunnel active pid=$($listener.OwningProcess) on $listenAddress`:$listenPort"
+        } else {
+            Write-DrisaWatchdogLog "VPS audio tunnel failed to start (tailscale pid=$($started.Id), exit=$($started.ExitCode))"
+        }
+    } catch {
+        Write-DrisaWatchdogLog "VPS audio tunnel error: $($_.Exception.Message)"
     }
 }
 
@@ -169,9 +218,13 @@ try {
         }
     }
 
-    if ($gamingMode -or $env:DRISA_STT_URL -eq $env:DRISA_AUDIO_URL -or $env:DRISA_TTS_URL -eq $env:DRISA_AUDIO_URL) {
+    if ($env:DRISA_STT_HOST -eq 'vps' -or $env:DRISA_TTS_HOST -eq 'vps') {
+        Ensure-DrisaVpsAudioTunnel
+    }
+    if ($env:DRISA_STT_HOST -eq 'homelab' -or $env:DRISA_TTS_HOST -eq 'homelab') {
         Ensure-DrisaAudioTunnel
     }
+    if ($gamingMode) { Ensure-DrisaAudioTunnel }
 
     Ensure-DrisaProcess $gatewayScript $gatewayPidFile 'gateway'
     $voiceScript = if ($gamingMode) { $gamingVoiceScript } else { $normalVoiceScript }

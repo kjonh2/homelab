@@ -371,6 +371,20 @@ class AudioPayloadTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             decode_audio_payload(encoded)
 
+    def test_world_bridge_writes_plain_user_text_and_drisa_reply(self):
+        with tempfile.TemporaryDirectory() as directory:
+            text_path = Path(directory) / "drisa_text.tmp"
+            reply_path = Path(directory) / "drisa_response.tmp"
+            with (
+                patch.object(gateway, "BRIDGE_TEXT", text_path),
+                patch.object(gateway, "BRIDGE_RESP", reply_path),
+            ):
+                gateway.send_to_drisa("  Olá, Drisa.  ", "redmi-note-11")
+                gateway.send_reply_to_world("  Estou a ouvir.  ")
+
+            self.assertEqual(text_path.read_text(encoding="utf-8"), "Olá, Drisa.\n")
+            self.assertEqual(reply_path.read_text(encoding="utf-8"), "Estou a ouvir.\n")
+
     def test_llm_echo_is_not_returned_for_tts(self):
         import requests
 
@@ -590,12 +604,29 @@ class AudioPayloadTests(unittest.TestCase):
     def test_stt_does_not_fallback_when_homelab_inference_may_still_run(self):
         with (
             patch.object(gateway, "load_config", return_value={"stt_engine": "api", "fallback_local_stt": False}),
-            patch.object(gateway, "_unsloth_cfg", return_value={"stt_model": "moss", "fallback_stt_model": "parakeet"}),
+            patch.object(gateway, "_unsloth_cfg", return_value={
+                "stt_model": "moss", "stt_host": "homelab", "stt_url": "http://homelab/v1",
+                "fallback_stt_model": "parakeet",
+            }),
             patch.object(gateway, "unsloth_transcribe", side_effect=gateway.AudioBackendBusyError("busy")) as transcribe,
         ):
             with self.assertRaises(gateway.AudioBackendBusyError):
                 gateway.transcribe(Path("unused.wav"))
-        transcribe.assert_called_once_with(Path("unused.wav"), "moss")
+        transcribe.assert_called_once_with(Path("unused.wav"), "moss", host="homelab", base_url="http://homelab/v1")
+
+    def test_stt_falls_back_to_pc_when_vps_is_busy(self):
+        cfg = {
+            "stt_model": "moss", "stt_host": "vps", "stt_url": "http://vps/v1",
+            "fallback_stt_model": "parakeet", "fallback_stt_host": "pc",
+            "fallback_stt_url": "http://127.0.0.1:8888/v1", "base_url": "http://127.0.0.1:8888/v1",
+        }
+        with (
+            patch.object(gateway, "load_config", return_value={"stt_engine": "api", "fallback_local_stt": False}),
+            patch.object(gateway, "_unsloth_cfg", return_value=cfg),
+            patch.object(gateway, "unsloth_transcribe", side_effect=[gateway.AudioBackendBusyError("busy"), "Texto do portátil."]) as transcribe,
+        ):
+            self.assertEqual(gateway.transcribe(Path("unused.wav")), "Texto do portátil.")
+        self.assertEqual(transcribe.call_args_list[1].kwargs, {"host": "pc", "base_url": "http://127.0.0.1:8888/v1"})
 
     def test_unsloth_keeps_full_stt_package_ids(self):
         moss = "audio-cpp/audio.cpp-gguf/MOSS-Transcribe-Diarize-GGUF"

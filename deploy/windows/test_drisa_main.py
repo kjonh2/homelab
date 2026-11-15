@@ -3,7 +3,9 @@ import logging
 import os
 import sys
 import tempfile
+import threading
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,6 +16,45 @@ with patch("logging.basicConfig"):
 
 
 class DrisaFallbackTests(unittest.TestCase):
+    def make_audio_gate_assistant(self, wake_word_enabled):
+        class Detector:
+            @staticmethod
+            def process_audio(_audio):
+                return False
+
+        return SimpleNamespace(
+            config={
+                "audio": {"min_speech_samples": 10},
+                "wake_word": {"enabled": wake_word_enabled},
+            },
+            wake_word_detector=Detector(),
+            is_processing_speech=False,
+            _gemini_processing=False,
+            processing_lock=threading.Lock(),
+            _speech_gate_lock=threading.Lock(),
+            _last_speech_fingerprint=None,
+            _last_speech_fingerprint_at=0.0,
+            speech_queue=unittest.mock.Mock(),
+            processing_thread=unittest.mock.Mock(is_alive=lambda: True),
+        )
+
+    def test_microphone_segment_is_queued_when_wake_word_is_disabled(self):
+        assistant = self.make_audio_gate_assistant(wake_word_enabled=False)
+        DrisaAssistant.on_speech_end(assistant, [0.1] * 100)
+        assistant.speech_queue.put.assert_called_once()
+
+    def test_microphone_segment_stays_gated_when_wake_word_is_enabled(self):
+        assistant = self.make_audio_gate_assistant(wake_word_enabled=True)
+        DrisaAssistant.on_speech_end(assistant, [0.1] * 100)
+        assistant.speech_queue.put.assert_not_called()
+
+    def test_microphone_segment_is_discarded_during_post_tts_echo_guard(self):
+        assistant = self.make_audio_gate_assistant(wake_word_enabled=False)
+        assistant._ignore_audio_until = 100.0
+        with patch("drisa_main.time.monotonic", return_value=99.0):
+            DrisaAssistant.on_speech_end(assistant, [0.1] * 100)
+        assistant.speech_queue.put.assert_not_called()
+
     def test_local_llm_runs_when_gemini_cli_is_missing(self):
         utterance = "Qual é o estado dos meus serviços agora?"
         assistant = object.__new__(DrisaAssistant)
@@ -153,12 +194,14 @@ class DrisaFallbackTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir, patch("shutil.which", return_value=None), \
                 patch("urllib.request.urlopen", side_effect=response_by_host) as request, \
+                patch("drisa_main.ensure_local_llm_model_loaded") as ensure_local, \
                 patch.dict(os.environ, {
                     "DRISA_LLM_HOST": "vps",
                     "DRISA_LLM_URL": "https://vps.example/v1",
                     "DRISA_LLM_KEY": "test-vps-key",
                     "DRISA_UNSLOTH_URL": "http://127.0.0.1:8888/v1",
                     "DRISA_UNSLOTH_KEY": "",
+                    "DRISA_LLM_FALLBACK_MODEL": "local-test-model",
                     "DRISA_LLM_FALLBACK": "",
                 }), patch("drisa_main.DRISA_HOME", Path(temp_dir)):
             response = assistant.process_command("O que podes fazer?", "pt")
@@ -166,6 +209,8 @@ class DrisaFallbackTests(unittest.TestCase):
         self.assertEqual(response, "Posso ajudar com isso.")
         self.assertEqual(request.call_count, 3)
         self.assertTrue(request.call_args.args[0].full_url.startswith("http://127.0.0.1:8888/v1/"))
+        self.assertEqual(json.loads(request.call_args.args[0].data)["model"], "local-test-model")
+        ensure_local.assert_called_once_with("http://127.0.0.1:8888/v1", "", "local-test-model")
 
 
 if __name__ == "__main__":
