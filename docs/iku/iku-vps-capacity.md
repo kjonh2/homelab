@@ -22,6 +22,8 @@ A VPS não tem folga medida para instalar este serviço em segurança: o histór
 
 Reverificação live em 2026-11-15 05:42 Europe/Paris: `free -h` reportou 649 MiB disponíveis; `kubectl top node` mostrou 6746 MiB usados (87%) e 2224m CPU (55%). O áudio VPS usava 2978 MiB e o servidor LFM3 1248 MiB. LFM3, Drisa audio VPS, Nextcloud, n8n e portal estavam `1/1 Ready`. Este estado não tem margem medida para acrescentar o processo do Unsloth Studio com segurança, mesmo que ele use o servidor LFM3 existente sem carregar outra cópia do modelo.
 
+Reverificação live em 2026-11-15 à noite: os dois nós K3s estavam `Ready`; `kubectl top nodes` mostrou a VPS a 2860m CPU (71%) e 6449 MiB de memória (83%). `free -h` reportou 931 MiB disponíveis, sem swap, e o disco raiz tinha 45 GiB livres. O pod de áudio VPS consumia 3031 MiB e 2674m CPU; o servidor llama.cpp consumia 894 MiB; Nextcloud 132 MiB e n8n 367 MiB. Portal/login, Google config, Nextcloud login/status, n8n `/healthz` e LFM3 `/health` responderam HTTP 200; Nextcloud indicou instalação concluída e manutenção desativada. Com esta carga, continua sem margem segura para acrescentar Unsloth Studio à VPS. O router llama.cpp existente já serve os modelos GGUF de LFM3 e deve continuar a ser o único servidor de texto nela.
+
 Em 2026-11-12, a API autenticada `/models` mostrou `lfm3-uncensored` carregado; `/health` e `/models` responderam HTTP 200. A configuração da Drisa aponta para esta API da VPS. Este estado substitui a nota anterior sobre o modelo Omni em execução; Omni e texto continuam a ser opções selecionáveis, com apenas um modelo residente de cada vez.
 
 ### Medição comparativa LFM3 — 2026-11-14
