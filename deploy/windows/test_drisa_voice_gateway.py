@@ -864,6 +864,7 @@ class GatewayAsyncAudioTests(unittest.IsolatedAsyncioTestCase):
         ])
         android = FakeWebSocket()
         gateway.ACTIVE_CLIENTS.add(android)
+        gateway.ACTIVE_CLIENT_POLICIES[android] = {"transcribe": True, "reply": True}
         try:
             with (
                 patch.object(gateway, "load_config", return_value=config),
@@ -876,6 +877,7 @@ class GatewayAsyncAudioTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.wait_for(gateway.handle_client(source), timeout=2)
         finally:
             gateway.ACTIVE_CLIENTS.discard(android)
+            gateway.ACTIVE_CLIENT_POLICIES.pop(android, None)
 
         llm.assert_not_called()
         bridge.assert_not_called()
@@ -914,7 +916,14 @@ class GatewayAsyncAudioTests(unittest.IsolatedAsyncioTestCase):
             json.dumps({"type": "text", "text": "Qual é o estado da VPS?"}),
         ])
         android = FakeWebSocket()
+        transcript_only = FakeWebSocket()
+        reply_only = FakeWebSocket()
         gateway.ACTIVE_CLIENTS.add(android)
+        gateway.ACTIVE_CLIENTS.add(transcript_only)
+        gateway.ACTIVE_CLIENTS.add(reply_only)
+        gateway.ACTIVE_CLIENT_POLICIES[android] = {"transcribe": True, "reply": True}
+        gateway.ACTIVE_CLIENT_POLICIES[transcript_only] = {"transcribe": True, "reply": False}
+        gateway.ACTIVE_CLIENT_POLICIES[reply_only] = {"transcribe": False, "reply": True}
         try:
             with (
                 patch.object(gateway, "load_config", return_value=config),
@@ -928,6 +937,11 @@ class GatewayAsyncAudioTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.wait_for(gateway.handle_client(source), timeout=2)
         finally:
             gateway.ACTIVE_CLIENTS.discard(android)
+            gateway.ACTIVE_CLIENTS.discard(transcript_only)
+            gateway.ACTIVE_CLIENTS.discard(reply_only)
+            gateway.ACTIVE_CLIENT_POLICIES.pop(android, None)
+            gateway.ACTIVE_CLIENT_POLICIES.pop(transcript_only, None)
+            gateway.ACTIVE_CLIENT_POLICIES.pop(reply_only, None)
 
         self.assertEqual(source.sent[0]["type"], "auth")
         self.assertEqual(bridge_input.call_args.args[0], "Qual é o estado da VPS?")
@@ -935,6 +949,8 @@ class GatewayAsyncAudioTests(unittest.IsolatedAsyncioTestCase):
         llm.assert_called_once_with("Qual é o estado da VPS?")
         self.assertEqual([m["type"] for m in android.sent], ["transcript", "processing", "reply", "processing", "tts"])
         self.assertEqual(android.sent[-1]["audio_b64"], base64.b64encode(b"RIFF-audio").decode())
+        self.assertEqual([m["type"] for m in transcript_only.sent], ["transcript"])
+        self.assertEqual([m["type"] for m in reply_only.sent], ["processing", "reply", "processing", "tts"])
 
     async def test_invalid_reauthentication_revokes_model_access(self):
         config = {

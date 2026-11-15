@@ -47,6 +47,7 @@ STT_TIMEOUT_SECONDS = 210
 LLM_TIMEOUT_SECONDS = 150
 TTS_TIMEOUT_SECONDS = 150
 ACTIVE_CLIENTS = set()
+ACTIVE_CLIENT_POLICIES = {}
 
 
 class AudioBackendBusyError(RuntimeError):
@@ -54,15 +55,30 @@ class AudioBackendBusyError(RuntimeError):
 
 
 async def broadcast_event(source, message):
-    """Send a Drisa turn event to its origin and every authenticated client."""
+    """Broadcast turn events only to connected clients allowed to receive them."""
     encoded = json.dumps(message, ensure_ascii=False)
     recipients = set(ACTIVE_CLIENTS)
     recipients.add(source)
+    event_type = message.get("type")
+    required_permission = {
+        "transcript": "transcribe",
+        "reply": "reply",
+        "tts": "reply",
+    }.get(event_type)
+    if event_type == "processing":
+        required_permission = {
+            "llm": "reply",
+            "tts": "reply",
+        }.get(message.get("stage"))
     for client in recipients:
+        if client is not source and required_permission:
+            if not ACTIVE_CLIENT_POLICIES.get(client, {}).get(required_permission, False):
+                continue
         try:
             await client.send(encoded)
         except Exception:
             ACTIVE_CLIENTS.discard(client)
+            ACTIVE_CLIENT_POLICIES.pop(client, None)
 
 
 async def process_text_turn(ws, device_id, user, text, policy):
@@ -1125,6 +1141,7 @@ async def handle_client(ws):
         if mtype == "hello":
             # A new handshake must never inherit an earlier authenticated state.
             ACTIVE_CLIENTS.discard(ws)
+            ACTIVE_CLIENT_POLICIES.pop(ws, None)
             authed = False
             device_id = str(msg.get("device_id", "unknown"))[:64]
             user = str(msg.get("user", device_id))[:64]
@@ -1138,6 +1155,10 @@ async def handle_client(ws):
             authed = in_list
             if authed:
                 ACTIVE_CLIENTS.add(ws)
+                ACTIVE_CLIENT_POLICIES[ws] = {
+                    "transcribe": bool(pol.get("transcribe")),
+                    "reply": bool(pol.get("reply")),
+                }
             log_to_obsidian(device_id, user,
                             f"ligado (allowlist={in_list})", "session")
             await ws.send(json.dumps({"type": "auth", "ok": in_list, "policy": pol}))
@@ -1241,6 +1262,7 @@ async def handle_client(ws):
 
     print(f"[gateway] {peer} desligou ({device_id})")
     ACTIVE_CLIENTS.discard(ws)
+    ACTIVE_CLIENT_POLICIES.pop(ws, None)
 
 
 async def main():
