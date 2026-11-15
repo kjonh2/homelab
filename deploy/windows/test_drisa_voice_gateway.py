@@ -17,40 +17,142 @@ import drisa_voice_gateway as gateway
 from drisa_voice_gateway import MAX_AUDIO_BYTES, decode_audio_payload
 
 
-class ModelManagementErrorTests(unittest.TestCase):
-    def test_mcp_auth_and_disabled_errors_are_actionable(self):
-        import requests
-
-        for status, expected in (
-            (401, "Settings > API"),
-            (404, "Settings > Agents"),
-        ):
-            with self.subTest(status=status):
-                response = type("FakeResponse", (), {"status_code": status})()
-                with (
-                    patch.object(gateway, "_unsloth_cfg", return_value={"base_url": "http://127.0.0.1:8888/v1", "key": ""}),
-                    patch.object(requests, "post", return_value=response),
-                ):
-                    with self.assertRaisesRegex(RuntimeError, expected):
-                        gateway._mcp_tool("list_models", {"kind": "llm"})
-
-
 class ModelCatalogTests(unittest.TestCase):
     def test_pc_catalog_filters_image_models_and_reports_loaded_state(self):
+        import requests
+
+        model_id = "AtomicChat/LFM3-1.7B-Uncensored-GGUF"
+
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = payload
+
+            @staticmethod
+            def raise_for_status():
+                return None
+
+            def json(self):
+                return self.payload
+
         with (
-            patch.object(gateway, "_mcp_tool", return_value={"models": [
-                {"id": "AtomicChat/LFM3-1.7B-Uncensored-GGUF", "loaded": True},
-                {"id": "flux-3-image", "loaded": False},
-            ]}) as mcp_tool,
+            patch.object(gateway, "_unsloth_cfg", return_value={"base_url": "http://127.0.0.1:8888/v1", "key": ""}),
             patch.object(gateway, "load_config", return_value={
-                "llm_host": "pc", "llm_model": "AtomicChat/LFM3-1.7B-Uncensored-GGUF",
+                "llm_host": "pc", "llm_model": model_id,
             }),
+            patch.object(requests, "get", side_effect=[
+                FakeResponse({"models": [
+                    {"id": model_id, "task": "text-generation"},
+                    {"id": "flux-3-image", "task": "text-generation"},
+                ]}),
+                FakeResponse({"data": [{"id": model_id, "loaded": True}]}),
+            ]) as get,
         ):
             result = gateway.model_catalog("pc", "llm")
 
-        self.assertEqual(mcp_tool.call_args.args, ("list_models", {"kind": "llm", "source": "local", "loaded_only": False}))
-        self.assertEqual(result["selected"], "AtomicChat/LFM3-1.7B-Uncensored-GGUF")
-        self.assertEqual(result["models"], [{"id": "AtomicChat/LFM3-1.7B-Uncensored-GGUF", "loaded": True}])
+        self.assertEqual([call.args[0] for call in get.call_args_list], [
+            "http://127.0.0.1:8888/api/models/local",
+            "http://127.0.0.1:8888/api/inference/loaded-models",
+        ])
+        self.assertEqual(result["selected"], model_id)
+        self.assertEqual(result["models"], [{"id": model_id, "loaded": True}])
+        self.assertEqual(result["message"], "")
+
+    def test_pc_tts_catalog_lists_downloaded_audio_models_and_load_state(self):
+        import requests
+
+        kokoro = "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF"
+
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = payload
+
+            @staticmethod
+            def raise_for_status():
+                return None
+
+            def json(self):
+                return self.payload
+
+        with (
+            patch.object(gateway, "_unsloth_cfg", return_value={"base_url": "http://127.0.0.1:8888/v1", "key": ""}),
+            patch.object(gateway, "load_config", return_value={"tts_host": "pc", "tts_model": kokoro}),
+            patch.object(requests, "get", side_effect=[
+                FakeResponse({"models": [
+                    {"id": kokoro, "task": "tts", "downloaded": True},
+                    {"id": "audio-cpp/audio.cpp-gguf/Not-Downloaded-TTS", "task": "tts", "downloaded": False},
+                    {"id": "audio-cpp/audio.cpp-gguf/MOSS-Transcribe-Diarize-GGUF", "task": "asr", "downloaded": True},
+                ]}),
+                FakeResponse({"data": [{"id": kokoro, "loaded": True}]}),
+            ]) as get,
+        ):
+            result = gateway.model_catalog("pc", "tts")
+
+        self.assertEqual(get.call_args_list[0].args[0], "http://127.0.0.1:8888/api/inference/audio/catalog")
+        self.assertEqual(get.call_args_list[0].kwargs["params"], {"source": "cache"})
+        self.assertEqual(result["selected"], kokoro)
+        self.assertEqual(result["models"], [{"id": kokoro, "loaded": True}])
+
+
+class PcNativeModelManagementTests(unittest.TestCase):
+    class FakeResponse:
+        def __init__(self, payload=None, content=b"wav"):
+            self.payload = payload or {}
+            self.content = content
+
+        @staticmethod
+        def raise_for_status():
+            return None
+
+        def json(self):
+            return self.payload
+
+    def test_pc_llm_load_uses_native_studio_api(self):
+        import requests
+
+        model_id = "LiquidAI/LFM3-1.7B-GGUF"
+        with (
+            patch.object(gateway, "_unsloth_cfg", return_value={"base_url": "http://127.0.0.1:8888/v1", "key": ""}),
+            patch.object(gateway, "load_config", return_value={"llm_host": "pc", "llm_model": model_id}),
+            patch.object(requests, "get", side_effect=[
+                self.FakeResponse({"models": [{"id": model_id, "task": "text-generation"}]}),
+                self.FakeResponse({"data": []}),
+                self.FakeResponse({"data": []}),
+                self.FakeResponse({"data": [{"id": model_id, "loaded": True}]}),
+            ]) as get,
+            patch.object(requests, "post", return_value=self.FakeResponse({"status": "loading", "model": model_id})) as post,
+            patch.object(gateway, "_save_model_selection") as save_selection,
+        ):
+            result = gateway.load_model_for_app("pc", "llm", model_id)
+
+        self.assertEqual(result, "Modelo carregado no portátil.")
+        self.assertEqual(post.call_args.args[0], "http://127.0.0.1:8888/api/inference/load")
+        self.assertEqual(post.call_args.kwargs["json"], {"model_path": model_id, "engine": "auto"})
+        self.assertEqual(get.call_count, 4)
+        save_selection.assert_called_once_with("pc", "llm", model_id)
+
+    def test_pc_tts_load_uses_native_speech_api_and_confirms_loaded_state(self):
+        import requests
+
+        model_id = "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF"
+        with (
+            patch.object(gateway, "_unsloth_cfg", return_value={"base_url": "http://127.0.0.1:8888/v1", "key": ""}),
+            patch.object(gateway, "load_config", return_value={"tts_host": "pc", "tts_model": model_id}),
+            patch.object(requests, "get", side_effect=[
+                self.FakeResponse({"models": [{"id": model_id, "task": "tts", "downloaded": True}]}),
+                self.FakeResponse({"data": []}),
+                self.FakeResponse({"data": []}),
+                self.FakeResponse({"data": [{"id": model_id, "loaded": True}]}),
+            ]) as get,
+            patch.object(requests, "post", return_value=self.FakeResponse()) as post,
+            patch.object(gateway, "_save_model_selection") as save_selection,
+        ):
+            result = gateway.load_model_for_app("pc", "tts", model_id)
+
+        self.assertEqual(result, "Modelo carregado no portátil.")
+        self.assertEqual(post.call_args.args[0], "http://127.0.0.1:8888/v1/audio/speech")
+        self.assertEqual(post.call_args.kwargs["json"], {"model": model_id, "input": "Pronto.", "response_format": "wav"})
+        self.assertEqual(get.call_count, 4)
+        save_selection.assert_called_once_with("pc", "tts", model_id)
 
     def test_vps_catalog_reports_available_and_loaded_models(self):
         import requests
@@ -148,13 +250,11 @@ class PcAudioCppRouteTests(unittest.TestCase):
         with (
             patch.object(gateway, "_unsloth_cfg", return_value={"base_url": "http://127.0.0.1:8888/v1"}),
             patch.object(gateway, "load_config", return_value={"stt_host": "pc", "stt_model": moss}),
-            patch.object(gateway, "_mcp_tool") as mcp_tool,
             patch.object(requests, "get", return_value=StatusResponse()) as get,
         ):
             result = gateway.model_catalog("pc", "stt")
 
         get.assert_called_once_with("http://127.0.0.1:8888/api/inference/audio/stt/status", timeout=(5, 15))
-        mcp_tool.assert_not_called()
         self.assertEqual(result["selected"], moss)
         self.assertEqual(result["models"], [{"id": moss, "loaded": False}, {"id": parakeet, "loaded": True}])
 
@@ -187,7 +287,6 @@ class PcAudioCppRouteTests(unittest.TestCase):
         with (
             patch.object(gateway, "_unsloth_cfg", return_value={"base_url": "http://127.0.0.1:8888/v1"}),
             patch.object(gateway, "load_config", return_value={"stt_host": "pc", "stt_model": parakeet}),
-            patch.object(gateway, "_mcp_tool") as mcp_tool,
             patch.object(requests, "get", side_effect=[StatusResponse(parakeet), StatusResponse(parakeet), StatusResponse(moss)]) as get,
             patch.object(requests, "post", return_value=LoadResponse()) as post,
             patch.object(gateway, "_save_model_selection") as save_selection,
@@ -199,7 +298,6 @@ class PcAudioCppRouteTests(unittest.TestCase):
         self.assertEqual(post.call_args.args[0], "http://127.0.0.1:8888/api/inference/audio/stt/load")
         self.assertEqual(post.call_args.kwargs["json"], {"model": moss, "engine": "audiocpp", "device": "auto"})
         self.assertEqual(get.call_count, 3)
-        mcp_tool.assert_not_called()
         sleep.assert_not_called()
         save_selection.assert_called_once_with("pc", "stt", moss)
 

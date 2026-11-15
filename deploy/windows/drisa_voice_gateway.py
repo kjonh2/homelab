@@ -180,49 +180,6 @@ _VPS_LLM_URL = "https://vps-4e5174e4.tail2931da.ts.net:8445/v1"
 _VPS_MODELS_URL = "https://vps-4e5174e4.tail2931da.ts.net:8445/models"
 
 
-def _mcp_tool(name: str, arguments: dict) -> dict:
-    import requests
-    cfg = _unsloth_cfg()
-    base = cfg["base_url"].removesuffix("/v1") + "/mcp/"
-    headers = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
-    if cfg["key"]:
-        headers["Authorization"] = f"Bearer {cfg['key']}"
-    body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}}
-    response = requests.post(base, json=body, headers=headers, timeout=(5, 260))
-    if response.status_code == 401:
-        raise RuntimeError("O Unsloth Studio recusou a API key da Drisa. Configura uma chave válida em Settings > API.")
-    if response.status_code == 404:
-        raise RuntimeError("O MCP do Unsloth Studio está desativado. Ativa Allow agent connections em Settings > Agents.")
-    response.raise_for_status()
-    envelope = None
-    for line in response.text.splitlines():
-        if line.startswith("data: "):
-            try:
-                envelope = json.loads(line[6:])
-            except json.JSONDecodeError:
-                continue
-    if envelope is None:
-        try:
-            envelope = response.json()
-        except ValueError as exc:
-            raise RuntimeError("Resposta MCP inválida do Unsloth.") from exc
-    if envelope.get("error"):
-        raise RuntimeError(str(envelope["error"].get("message", "Erro MCP do Unsloth.")))
-    result = envelope.get("result", {})
-    if result.get("isError"):
-        contents = result.get("content", [])
-        detail = next((item.get("text", "") for item in contents if item.get("type") == "text"), "Erro ao gerir modelos no Unsloth.")
-        raise RuntimeError(detail[:500])
-    if isinstance(result.get("structuredContent"), dict):
-        return result["structuredContent"]
-    contents = result.get("content", [])
-    detail = next((item.get("text", "") for item in contents if item.get("type") == "text"), "")
-    try:
-        return json.loads(detail)
-    except (TypeError, json.JSONDecodeError):
-        return {"message": detail}
-
-
 def _is_image_generation_model(item: dict) -> bool:
     """Hide image-generation entries misclassified by the MCP catalog as LLMs."""
     identity = " ".join(str(item.get(field, "")) for field in ("id", "display_name")).lower()
@@ -233,8 +190,9 @@ def _is_image_generation_model(item: dict) -> bool:
 def _pc_model_catalog(category: str) -> dict:
     if category not in ("llm", "stt", "tts"):
         raise ValueError("Categoria de modelo inválida.")
+    import requests
+
     if category == "stt":
-        import requests
         state = _pc_audio_cpp_status(requests)
         downloaded = state.get("downloaded_models", [])
         if not isinstance(downloaded, list):
@@ -244,13 +202,101 @@ def _pc_model_catalog(category: str) -> dict:
                   for model_id in downloaded if isinstance(model_id, str)
                   and model_id.startswith("audio-cpp/audio.cpp-gguf/")]
         return {"models": models, "selected": _selected_model(load_config(), "pc", category), "message": ""}
-    result = _mcp_tool("list_models", {"kind": category, "source": "local", "loaded_only": False})
-    entries = result.get("models", [])
+
+    cfg = _unsloth_cfg()
+    root = cfg["base_url"].rstrip("/").removesuffix("/v1")
+    headers = {"Authorization": f"Bearer {cfg['key']}"} if cfg.get("key") else {}
+    if category == "llm":
+        response = requests.get(f"{root}/api/models/local", headers=headers, timeout=(5, 15))
+        response.raise_for_status()
+        entries = response.json().get("models", [])
+        entries = [item for item in entries if isinstance(item, dict)
+                   and str(item.get("task", "")).lower() == "text-generation"]
+    else:
+        response = requests.get(
+            f"{root}/api/inference/audio/catalog", params={"source": "cache"},
+            headers=headers, timeout=(5, 15),
+        )
+        response.raise_for_status()
+        entries = response.json().get("models", [])
+        entries = [item for item in entries if isinstance(item, dict)
+                   and item.get("downloaded") is True
+                   and str(item.get("task", "")).lower() == "tts"]
+
     if category == "llm":
         entries = [item for item in entries if not _is_image_generation_model(item)]
-    models = [{"id": item.get("id", ""), "loaded": bool(item.get("loaded", False))}
+    try:
+        loaded_ids = _pc_loaded_model_ids(requests, cfg)
+        message = ""
+    except Exception:
+        # Keep the installed catalog useful during a transient status failure,
+        # but tell the app that the loaded markers could not be confirmed.
+        loaded_ids = set()
+        message = "Não foi possível confirmar quais modelos estão carregados no portátil."
+    models = [{"id": item.get("id", ""), "loaded": item.get("id") in loaded_ids}
               for item in entries if item.get("id")]
-    return {"models": models, "selected": _selected_model(load_config(), "pc", category), "message": ""}
+    return {"models": models, "selected": _selected_model(load_config(), "pc", category), "message": message}
+
+
+def _pc_loaded_model_ids(requests, cfg: dict) -> set[str]:
+    root = cfg["base_url"].rstrip("/").removesuffix("/v1")
+    headers = {"Authorization": f"Bearer {cfg['key']}"} if cfg.get("key") else {}
+    response = requests.get(f"{root}/api/inference/loaded-models", headers=headers, timeout=(5, 15))
+    response.raise_for_status()
+    payload = response.json()
+    entries = payload.get("data", payload.get("models", []))
+    if not isinstance(entries, list):
+        raise RuntimeError("O Unsloth não devolveu a lista de modelos carregados.")
+    return {str(item.get("id") or item.get("model") or item.get("model_id"))
+            for item in entries if isinstance(item, dict)
+            and (item.get("loaded") is not False)
+            and (item.get("id") or item.get("model") or item.get("model_id"))}
+
+
+def _wait_for_pc_model(requests, cfg: dict, model_id: str, timeout: int = 240) -> None:
+    deadline = time.monotonic() + timeout
+    while True:
+        if model_id in _pc_loaded_model_ids(requests, cfg):
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError(f"O modelo {model_id} não ficou pronto no portátil dentro do prazo.")
+        time.sleep(min(2, remaining))
+
+
+def _load_pc_llm_model(requests, model_id: str) -> str:
+    cfg = _unsloth_cfg()
+    root = cfg["base_url"].rstrip("/").removesuffix("/v1")
+    headers = {"Authorization": f"Bearer {cfg['key']}"} if cfg.get("key") else {}
+    if model_id not in _pc_loaded_model_ids(requests, cfg):
+        response = requests.post(
+            f"{root}/api/inference/load", json={"model_path": model_id, "engine": "auto"},
+            headers=headers, timeout=(5, 260),
+        )
+        response.raise_for_status()
+        result = response.json()
+        if result.get("error") or str(result.get("status", "")).lower() in {"error", "failed", "cancelled"}:
+            raise RuntimeError(str(result.get("error") or result.get("message") or "O Unsloth recusou o carregamento do modelo."))
+        _wait_for_pc_model(requests, cfg, model_id)
+    _save_model_selection("pc", "llm", model_id)
+    return "Modelo carregado no portátil."
+
+
+def _load_pc_tts_model(requests, model_id: str) -> str:
+    cfg = _unsloth_cfg()
+    if model_id not in _pc_loaded_model_ids(requests, cfg):
+        # Studio has no standalone TTS load route. A short discarded speech
+        # request uses its public OpenAI-compatible API to load and verify it.
+        response = requests.post(
+            f"{cfg['base_url'].rstrip('/')}/audio/speech",
+            json={"model": model_id, "input": "Pronto.", "response_format": "wav"},
+            headers={"Authorization": f"Bearer {cfg['key']}"} if cfg.get("key") else {},
+            timeout=(5, 260),
+        )
+        response.raise_for_status()
+        _wait_for_pc_model(requests, cfg, model_id)
+    _save_model_selection("pc", "tts", model_id)
+    return "Modelo carregado no portátil."
 
 
 def _pc_audio_cpp_status(requests=None) -> dict:
@@ -439,9 +485,11 @@ def load_model_for_app(host: str, category: str, model_id: str) -> str:
         _save_model_selection(host, category, model_id)
         return "Modelo carregado no portátil."
     if host == "pc":
-        result = _mcp_tool("load_model", {"kind": category, "model": model_id, "wait_s": 240})
-        _save_model_selection(host, category, model_id)
-        return str(result.get("message") or "Modelo carregado no portátil.")
+        import requests
+        if category == "llm":
+            return _load_pc_llm_model(requests, model_id)
+        if category == "tts":
+            return _load_pc_tts_model(requests, model_id)
     if host == "vps" and category == "llm":
         import requests
         key_path = BASE / "iku_lfm3.key"

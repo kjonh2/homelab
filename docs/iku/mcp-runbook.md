@@ -52,3 +52,7 @@ O upstream tem uma [issue aberta no `docker/mcp-gateway`](https://github.com/doc
 - Nunca uses o perfil amplo `kiko` para a Drisa.
 - As alterações ao perfil aplicam-se à próxima sessão do Docker MCP Gateway. Reinicia o processo agente consumidor se continuar a mostrar a lista antiga.
 - Não instales o Docker MCP Toolkit na homelab ou na VPS, a menos que um agente vá correr nessas máquinas e precise do seu próprio perfil.
+
+## Catálogo e carregamento de modelos Drisa
+
+Em 2026-11-15, o gateway Drisa do portátil deixou de usar o resolver Docker MCP para os catálogos e carregamento de modelos no PC. Usa `GET /api/models/local` e `GET /api/inference/loaded-models` para texto, `GET /api/inference/audio/catalog?source=cache` para TTS, e as APIs nativas de load/speech do Unsloth. O STT do PC continua a usar a API audio.cpp. Um teste WSS autenticado confirmou os catálogos PC/VPS/homelab e os indicadores `loaded`; o Docker MCP continua degradado para ferramentas/secrets do agente, mas já não bloqueia a lista de modelos na app Iku.
