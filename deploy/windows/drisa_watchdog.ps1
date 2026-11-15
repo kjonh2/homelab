@@ -1,0 +1,382 @@
+$ErrorActionPreference = 'Stop'
+$drisaDir = Join-Path $env:USERPROFILE 'workspace\drisa'
+$logFile = Join-Path $drisaDir 'startup.log'
+$gatewayPidFile = Join-Path $drisaDir 'drisa_gateway.pid'
+$voicePidFile = Join-Path $drisaDir 'drisa_voice.pid'
+$pythonExe = Join-Path $drisaDir 'venv\Scripts\python.exe'
+$gatewayScript = Join-Path $drisaDir 'drisa_voice_gateway.py'
+$normalVoiceScript = Join-Path $drisaDir 'drisa_main.py'
+$gamingVoiceScript = Join-Path $drisaDir 'voice_loop_local.py'
+$modeFile = Join-Path $drisaDir 'drisa_mode.txt'
+$modeConfig = Join-Path $PSScriptRoot 'drisa_remote_config.ps1'
+$watchdogMutex = [System.Threading.Mutex]::new($false, 'Local\DrisaWatchdog')
+$watchdogMutexAcquired = $false
+try {
+    $watchdogMutexAcquired = $watchdogMutex.WaitOne(0)
+} catch [System.Threading.AbandonedMutexException] {
+    $watchdogMutexAcquired = $true
+}
+if (-not $watchdogMutexAcquired) {
+    $watchdogMutex.Dispose()
+    return
+}
+
+if (-not (Test-Path -LiteralPath $modeConfig)) {
+    $modeConfig = Join-Path $drisaDir 'drisa_remote_config.ps1'
+}
+if (Test-Path -LiteralPath $modeConfig) { . $modeConfig }
+
+function Set-DrisaRuntimeEnvironment([bool]$GamingMode) {
+    $configPath = Join-Path $drisaDir 'gateway_config.json'
+    $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+    $env:DRISA_HOME = $drisaDir
+    $env:DRISA_VAULT_PATH = Join-Path $env:USERPROFILE 'Documents\Obsidian Vault\Drisa\Voice Gateway'
+    $env:DRISA_UNSLOTH_URL = if ($config.unsloth_url) { $config.unsloth_url } else { 'http://127.0.0.1:8888/v1' }
+    $env:DRISA_AUDIO_URL = if ($config.audio_url) { $config.audio_url } else { 'http://127.0.0.1:8767/v1' }
+    $env:DRISA_HOMELAB_AUDIO_URL = if ($config.homelab_audio_url) { $config.homelab_audio_url } else { 'http://127.0.0.1:8766/v1' }
+    $env:DRISA_STT_ENGINE = if ($config.stt_engine) { $config.stt_engine } else { 'api' }
+    $env:DRISA_TTS_ENGINE = if ($config.tts_engine) { $config.tts_engine } else { 'api' }
+    $env:DRISA_STT_MODEL = if ($config.stt_model) { $config.stt_model } else { 'moss' }
+    $env:DRISA_STT_FALLBACK_MODEL = if ($config.fallback_stt_model) { $config.fallback_stt_model } else { 'parakeet' }
+    $env:DRISA_STT_HOST = if ($config.stt_host) { $config.stt_host } else { 'pc' }
+    $env:DRISA_STT_FALLBACK_HOST = if ($config.fallback_stt_host) { $config.fallback_stt_host } else { 'pc' }
+    $env:DRISA_STT_FALLBACK_URL = if ($config.fallback_stt_url) { $config.fallback_stt_url } else { $env:DRISA_UNSLOTH_URL }
+    $env:DRISA_STT_URL = if ($config.stt_url) { $config.stt_url } elseif ($env:DRISA_STT_HOST -in @('homelab', 'vps')) { $env:DRISA_AUDIO_URL } else { $env:DRISA_UNSLOTH_URL }
+    $env:DRISA_LLM_MODEL = if ($config.llm_model) { $config.llm_model } else { 'AtomicChat/LFM3-1.7B-Uncensored-GGUF' }
+    $env:DRISA_LLM_HOST = if ($config.llm_host) { $config.llm_host } else { 'pc' }
+    $env:DRISA_LLM_MAX_TOKENS = '64'
+    if ($config.llm_url) { $env:DRISA_LLM_URL = $config.llm_url }
+    $env:DRISA_LLM_FALLBACK_URL = if ($config.llm_fallback_url) { $config.llm_fallback_url } else { $env:DRISA_UNSLOTH_URL }
+    $env:DRISA_LLM_FALLBACK_MODEL = if ($config.llm_fallback_model) { $config.llm_fallback_model } else { $env:DRISA_LLM_MODEL }
+    $env:DRISA_TTS_MODEL = if ($config.tts_model) { $config.tts_model } else { 'kokoro' }
+    $env:DRISA_TTS_HOST = if ($config.tts_host) { $config.tts_host } else { 'pc' }
+    $env:DRISA_TTS_URL = if ($config.tts_url) { $config.tts_url } elseif ($env:DRISA_TTS_HOST -in @('homelab', 'vps')) { $env:DRISA_AUDIO_URL } else { $env:DRISA_UNSLOTH_URL }
+    $env:DRISA_TTS_FALLBACK_MODEL = if ($config.tts_fallback_model) { $config.tts_fallback_model } else { 'audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF' }
+    $env:DRISA_TTS_FALLBACK_URL = if ($config.tts_fallback_url) { $config.tts_fallback_url } else { $env:DRISA_UNSLOTH_URL }
+    $env:DRISA_TTS_VOICE = if ($config.tts_voice) { $config.tts_voice } else { 'pf_dora' }
+    $env:DRISA_AUDIO_KEY = if ($config.audio_key) { $config.audio_key } else { '' }
+
+    $keyPath = Join-Path $drisaDir 'unsloth.key'
+    if (Test-Path -LiteralPath $keyPath) {
+        $env:DRISA_UNSLOTH_KEY = (Get-Content -LiteralPath $keyPath -Raw).Trim()
+    }
+    if ($GamingMode -and (Get-Command Set-DrisaGamingEnvironment -ErrorAction SilentlyContinue)) {
+        Set-DrisaGamingEnvironment
+    }
+}
+
+function Write-DrisaWatchdogLog([string]$Message) {
+    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    "[$timestamp] Watchdog: $Message" | Out-File -FilePath $logFile -Encoding utf8 -Append
+}
+
+function Ensure-DrisaAudioTunnel {
+    $listenAddress = '127.0.0.1'
+    $listenPort = 8766
+    $forward = '127.0.0.1:8766:10.43.200.200:8080'
+    $sshTarget = 'kiko@100.72.114.73'
+    $sshExe = Join-Path $env:SystemRoot 'System32\OpenSSH\ssh.exe'
+    if (-not (Test-Path -LiteralPath $sshExe)) {
+        Write-DrisaWatchdogLog 'audio tunnel skipped: Windows OpenSSH client not found'
+        return
+    }
+
+    $matching = @(Get-CimInstance Win32_Process -Filter "Name = 'ssh.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { ([string]$_.CommandLine).Contains($forward) -and ([string]$_.CommandLine).Contains($sshTarget) })
+    $listener = Get-NetTCPConnection -State Listen -LocalAddress $listenAddress -LocalPort $listenPort -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($listener -and @($matching | Where-Object { $_.ProcessId -eq $listener.OwningProcess }).Count -gt 0) { return }
+    if ($listener) {
+        Write-DrisaWatchdogLog "audio tunnel skipped: $listenAddress`:$listenPort is owned by another process"
+        return
+    }
+    if ($matching.Count -gt 0) { return }
+
+    try {
+        $started = Start-Process -FilePath $sshExe -ArgumentList @(
+            '-N', '-o', 'ExitOnForwardFailure=yes', '-o', 'BatchMode=yes',
+            '-o', 'ServerAliveInterval=30', '-o', 'ServerAliveCountMax=3',
+            '-L', $forward, $sshTarget
+        ) -WindowStyle Hidden -PassThru
+        Start-Sleep -Milliseconds 800
+        $listener = Get-NetTCPConnection -State Listen -LocalAddress $listenAddress -LocalPort $listenPort -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if ($listener -and $listener.OwningProcess -eq $started.Id) {
+            Write-DrisaWatchdogLog "audio tunnel active pid=$($started.Id) on $listenAddress`:$listenPort"
+        } else {
+            Write-DrisaWatchdogLog "audio tunnel failed to start (ssh pid=$($started.Id), exit=$($started.ExitCode))"
+        }
+    } catch {
+        Write-DrisaWatchdogLog "audio tunnel error: $($_.Exception.Message)"
+    }
+}
+
+function Ensure-DrisaVpsAudioTunnel {
+    $listenAddress = '127.0.0.1'
+    $listenPort = 8767
+    $forward = '127.0.0.1:8767:10.43.113.250:8080'
+    $sshTarget = 'vps-4e5174e4'
+    $tailscaleExe = Join-Path $env:ProgramFiles 'Tailscale\tailscale.exe'
+    if (-not (Test-Path -LiteralPath $tailscaleExe)) {
+        Write-DrisaWatchdogLog 'VPS audio tunnel skipped: Tailscale CLI not found'
+        return
+    }
+    $matching = @(Get-CimInstance Win32_Process -Filter "Name = 'ssh.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { ([string]$_.CommandLine).Contains($forward) -and ([string]$_.CommandLine).Contains($sshTarget) })
+    $listener = Get-NetTCPConnection -State Listen -LocalAddress $listenAddress -LocalPort $listenPort -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($listener -and @($matching | Where-Object { $_.ProcessId -eq $listener.OwningProcess }).Count -gt 0) { return }
+    if ($listener) {
+        Write-DrisaWatchdogLog "VPS audio tunnel skipped: $listenAddress`:$listenPort is owned by another process"
+        return
+    }
+    if ($matching.Count -gt 0) { return }
+    try {
+        $started = Start-Process -FilePath $tailscaleExe -ArgumentList @(
+            'ssh', 'ubuntu@vps-4e5174e4', '-N', '-o', 'ExitOnForwardFailure=yes',
+            '-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=30', '-o', 'ServerAliveCountMax=3',
+            '-L', $forward
+        ) -WindowStyle Hidden -PassThru
+        for ($attempt = 0; $attempt -lt 10; $attempt++) {
+            Start-Sleep -Milliseconds 500
+            $listener = Get-NetTCPConnection -State Listen -LocalAddress $listenAddress -LocalPort $listenPort -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+            $matching = @(Get-CimInstance Win32_Process -Filter "Name = 'ssh.exe'" -ErrorAction SilentlyContinue |
+                Where-Object { ([string]$_.CommandLine).Contains($forward) -and ([string]$_.CommandLine).Contains($sshTarget) })
+            if ($listener -and @($matching | Where-Object { $_.ProcessId -eq $listener.OwningProcess }).Count -gt 0) { break }
+        }
+        if ($listener -and @($matching | Where-Object { $_.ProcessId -eq $listener.OwningProcess }).Count -gt 0) {
+            Write-DrisaWatchdogLog "VPS audio tunnel active pid=$($listener.OwningProcess) on $listenAddress`:$listenPort"
+        } else {
+            Write-DrisaWatchdogLog "VPS audio tunnel failed to start (tailscale pid=$($started.Id), exit=$($started.ExitCode))"
+        }
+    } catch {
+        Write-DrisaWatchdogLog "VPS audio tunnel error: $($_.Exception.Message)"
+    }
+}
+
+function Ensure-DrisaPostgresTunnel {
+    $listenAddress = '127.0.0.1'
+    $listenPort = 5433
+    $forward = '127.0.0.1:5433:10.43.41.36:5432'
+    $sshTarget = 'vps-4e5174e4'
+    $tailscaleExe = Join-Path $env:ProgramFiles 'Tailscale\tailscale.exe'
+    if (-not (Test-Path -LiteralPath $tailscaleExe)) {
+        Write-DrisaWatchdogLog 'PostgreSQL tunnel skipped: Tailscale CLI not found'
+        return
+    }
+    $matching = @(Get-CimInstance Win32_Process -Filter "Name = 'ssh.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { ([string]$_.CommandLine).Contains($forward) -and ([string]$_.CommandLine).Contains($sshTarget) })
+    $listener = Get-NetTCPConnection -State Listen -LocalAddress $listenAddress -LocalPort $listenPort -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($listener -and @($matching | Where-Object { $_.ProcessId -eq $listener.OwningProcess }).Count -gt 0) { return }
+    if ($listener) {
+        Write-DrisaWatchdogLog "PostgreSQL tunnel skipped: $listenAddress`:$listenPort is owned by another process"
+        return
+    }
+    if ($matching.Count -gt 0) { return }
+    try {
+        $started = Start-Process -FilePath $tailscaleExe -ArgumentList @(
+            'ssh', 'ubuntu@vps-4e5174e4', '-N', '-o', 'ExitOnForwardFailure=yes',
+            '-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=30', '-o', 'ServerAliveCountMax=3',
+            '-L', $forward
+        ) -WindowStyle Hidden -PassThru
+        Start-Sleep -Milliseconds 1200
+        $listener = Get-NetTCPConnection -State Listen -LocalAddress $listenAddress -LocalPort $listenPort -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        $matching = @(Get-CimInstance Win32_Process -Filter "Name = 'ssh.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { ([string]$_.CommandLine).Contains($forward) -and ([string]$_.CommandLine).Contains($sshTarget) })
+        if ($listener -and @($matching | Where-Object { $_.ProcessId -eq $listener.OwningProcess }).Count -gt 0) {
+            Write-DrisaWatchdogLog "PostgreSQL tunnel active pid=$($listener.OwningProcess) on $listenAddress`:$listenPort"
+        } else {
+            Write-DrisaWatchdogLog "PostgreSQL tunnel failed to start (tailscale pid=$($started.Id), exit=$($started.ExitCode))"
+        }
+    } catch {
+        Write-DrisaWatchdogLog "PostgreSQL tunnel error: $($_.Exception.Message)"
+    }
+}
+
+function Ensure-DrisaLocalModelServer {
+    $unslothExe = Join-Path $env:USERPROFILE '.unsloth\studio\bin\unsloth.exe'
+    $serverProcesses = @()
+    if (Get-Command Get-DrisaGamingModelServerProcesses -ErrorAction SilentlyContinue) {
+        $serverProcesses = @(Get-DrisaGamingModelServerProcesses)
+    }
+
+    $listener = Get-NetTCPConnection -State Listen -LocalAddress 127.0.0.1 -LocalPort 8888 -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($listener) {
+        if (@($serverProcesses | Where-Object { $_.ProcessId -eq $listener.OwningProcess }).Count -gt 0) { return }
+        Write-DrisaWatchdogLog 'Unsloth fallback skipped: loopback port 8888 is owned by another process'
+        return
+    }
+    if ($serverProcesses.Count -gt 0) {
+        Write-DrisaWatchdogLog 'Unsloth fallback process exists but its loopback API is not listening; leaving it alone'
+        return
+    }
+    if (-not (Test-Path -LiteralPath $unslothExe)) {
+        $unsloth = Get-Command unsloth -ErrorAction SilentlyContinue
+        if (-not $unsloth) { $unsloth = Get-Command unsloth.cmd -ErrorAction SilentlyContinue }
+        if ($unsloth) { $unslothExe = $unsloth.Source }
+    }
+    if (-not (Test-Path -LiteralPath $unslothExe)) {
+        Write-DrisaWatchdogLog 'Unsloth fallback not started: Unsloth Studio executable was not found'
+        return
+    }
+
+    try {
+        $started = Start-Process -FilePath $unslothExe -ArgumentList @(
+            'studio', '-H', '127.0.0.1', '-p', '8888', '--no-cloudflare'
+        ) -WindowStyle Hidden -PassThru -WorkingDirectory $drisaDir
+        Start-Sleep -Milliseconds 1200
+        $listener = Get-NetTCPConnection -State Listen -LocalAddress 127.0.0.1 -LocalPort 8888 -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        $serverProcesses = @(Get-DrisaGamingModelServerProcesses)
+        if ($listener -and @($serverProcesses | Where-Object { $_.ProcessId -eq $listener.OwningProcess }).Count -gt 0) {
+            Write-DrisaWatchdogLog "Unsloth fallback active pid=$($listener.OwningProcess) on 127.0.0.1:8888"
+        } elseif ($listener) {
+            Write-DrisaWatchdogLog 'Unsloth fallback launch skipped: another process took loopback port 8888'
+        } else {
+            Write-DrisaWatchdogLog "Unsloth fallback launch requested pid=$($started.Id); API is not listening yet"
+        }
+    } catch {
+        Write-DrisaWatchdogLog "Unsloth fallback launch error: $($_.Exception.Message)"
+    }
+}
+
+function Get-DrisaProcesses([string]$ScriptPath) {
+    Get-CimInstance Win32_Process | Where-Object {
+        $_.ProcessId -ne $PID -and
+        ([string]$_.CommandLine).IndexOf($ScriptPath, [StringComparison]::OrdinalIgnoreCase) -ge 0
+    }
+}
+
+function Ensure-DrisaProcess([string]$ScriptPath, [string]$PidFile, [string]$Name) {
+    $running = @(Get-DrisaProcesses $ScriptPath)
+    if ($running.Count -gt 1) {
+        $processIds = @{}
+        foreach ($process in $running) { $processIds[[int]$process.ProcessId] = $true }
+        $roots = @($running | Where-Object { -not $processIds.ContainsKey([int]$_.ParentProcessId) })
+        $processGroups = @()
+        foreach ($root in $roots) {
+            $members = @($root)
+            while ($true) {
+                $parentIds = @($members | ForEach-Object { [int]$_.ProcessId })
+                $memberIds = @($members | ForEach-Object { [int]$_.ProcessId })
+                $children = @($running | Where-Object {
+                    $parentIds -contains [int]$_.ParentProcessId -and $memberIds -notcontains [int]$_.ProcessId
+                })
+                if ($children.Count -eq 0) { break }
+                $members += $children
+            }
+            $processGroups += [pscustomobject]@{ Root = $root; Members = $members }
+        }
+        if ($processGroups.Count -le 1) { $processGroups = @() }
+    }
+    if ($processGroups.Count -gt 1) {
+        $preferredPid = $null
+        if ($Name -eq 'gateway') {
+            $listener = Get-NetTCPConnection -State Listen -LocalAddress 127.0.0.1 -LocalPort 8765 -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+            if ($listener) {
+                $activeGroup = $processGroups | Where-Object { $_.Members.ProcessId -contains $listener.OwningProcess } | Select-Object -First 1
+                if ($activeGroup) { $preferredPid = $activeGroup.Root.ProcessId }
+            }
+        }
+        if (-not $preferredPid -and (Test-Path -LiteralPath $PidFile)) {
+            $storedPid = 0
+            if ([int]::TryParse((Get-Content -LiteralPath $PidFile -Raw).Trim(), [ref]$storedPid)) {
+                $storedGroup = $processGroups | Where-Object { $_.Members.ProcessId -contains $storedPid } | Select-Object -First 1
+                if ($storedGroup) { $preferredPid = $storedGroup.Root.ProcessId }
+            }
+        }
+        if (-not $preferredPid) {
+            $preferredPid = ($processGroups.Root | Sort-Object CreationDate | Select-Object -First 1).ProcessId
+        }
+        foreach ($group in $processGroups | Where-Object { $_.Root.ProcessId -ne $preferredPid }) {
+            foreach ($process in $group.Members | Sort-Object CreationDate -Descending) {
+                Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+            }
+            Write-DrisaWatchdogLog "stopped duplicate $Name process tree pid=$($group.Root.ProcessId); keeping pid=$preferredPid"
+        }
+        Start-Sleep -Milliseconds 500
+        $running = @(Get-DrisaProcesses $ScriptPath)
+    }
+    if ($Name -eq 'voice listener' -and -not $gamingMode) {
+        $bridgePath = Join-Path $drisaDir 'drisa_bridge.tmp'
+        $bridge = Get-Item -LiteralPath $bridgePath -ErrorAction SilentlyContinue
+        $bridgeIsStale = -not $bridge -or $bridge.LastWriteTime -lt (Get-Date).AddMinutes(-3)
+        if ($running.Count -gt 0 -and $bridgeIsStale) {
+            Write-DrisaWatchdogLog 'voice listener is running but microphone meter is stale; restarting it'
+            foreach ($process in $running) {
+                Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+            }
+            Start-Sleep -Seconds 2
+            $running = @(Get-DrisaProcesses $ScriptPath)
+        }
+    }
+    if ($Name -eq 'gateway') {
+        $listener = Get-NetTCPConnection -State Listen -LocalAddress 127.0.0.1 -LocalPort 8765 -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if (-not $listener) {
+            Write-DrisaWatchdogLog 'gateway process found without its loopback listener; restarting it'
+            foreach ($process in $running) {
+                Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+            }
+            Start-Sleep -Seconds 2
+            $running = @(Get-DrisaProcesses $ScriptPath)
+        }
+    }
+
+    if ($running.Count -eq 0) {
+        $started = Start-Process -FilePath $pythonExe -ArgumentList @($ScriptPath) `
+            -WindowStyle Hidden -PassThru -WorkingDirectory $drisaDir
+        Set-Content -LiteralPath $PidFile -Value $started.Id -Encoding ascii
+        Write-DrisaWatchdogLog "started $Name pid=$($started.Id)"
+        return
+    }
+
+    $listenerPid = $null
+    if ($Name -eq 'gateway') {
+        $listener = Get-NetTCPConnection -State Listen -LocalAddress 127.0.0.1 -LocalPort 8765 -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if ($listener) { $listenerPid = $listener.OwningProcess }
+    }
+    $selected = $running | Where-Object { $_.ProcessId -eq $listenerPid } | Select-Object -First 1
+    if (-not $selected) { $selected = $running | Select-Object -First 1 }
+    Set-Content -LiteralPath $PidFile -Value $selected.ProcessId -Encoding ascii
+}
+
+try {
+    $gamingMode = (Test-Path -LiteralPath $modeFile) -and
+        ((Get-Content -LiteralPath $modeFile -Raw).Trim().ToLowerInvariant() -eq 'gaming')
+    Set-DrisaRuntimeEnvironment $gamingMode
+    if ($gamingMode) {
+        if (Get-Command Stop-DrisaGamingModelServer -ErrorAction SilentlyContinue) {
+            Stop-DrisaGamingModelServer
+        }
+        if (Get-Command Stop-DrisaGamingWorld -ErrorAction SilentlyContinue) {
+            Stop-DrisaGamingWorld
+        }
+    } else {
+        Ensure-DrisaLocalModelServer
+    }
+
+    if ($env:DRISA_STT_HOST -eq 'vps' -or $env:DRISA_TTS_HOST -eq 'vps') {
+        Ensure-DrisaVpsAudioTunnel
+    }
+    Ensure-DrisaPostgresTunnel
+    if ($env:DRISA_STT_HOST -eq 'homelab' -or $env:DRISA_TTS_HOST -eq 'homelab') {
+        Ensure-DrisaAudioTunnel
+    }
+    if ($gamingMode) { Ensure-DrisaAudioTunnel }
+
+    Ensure-DrisaProcess $gatewayScript $gatewayPidFile 'gateway'
+    $voiceScript = if ($gamingMode) { $gamingVoiceScript } else { $normalVoiceScript }
+    Ensure-DrisaProcess $voiceScript $voicePidFile 'voice listener'
+} catch {
+    Write-DrisaWatchdogLog "error: $($_.Exception.Message)"
+} finally {
+    if ($watchdogMutexAcquired) { $watchdogMutex.ReleaseMutex() }
+    $watchdogMutex.Dispose()
+}

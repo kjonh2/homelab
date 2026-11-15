@@ -1,0 +1,400 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: iku-backup
+  labels:
+    app.kubernetes.io/part-of: iku
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: iku-backup-repo
+  namespace: iku-backup
+  labels:
+    app.kubernetes.io/name: iku-backup-server
+    app.kubernetes.io/part-of: iku
+  annotations:
+    userPattern: "1000"
+    groupPattern: "1000"
+    permPattern: "0770"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: iku-backup-server
+  namespace: iku-backup
+  labels:
+    app.kubernetes.io/name: iku-backup-server
+    app.kubernetes.io/part-of: iku
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: iku-backup-server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: iku-backup-server
+        app.kubernetes.io/part-of: iku
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/hostname: homelab
+      tolerations:
+        - key: homelab.role
+          operator: Equal
+          value: fallback
+          effect: NoSchedule
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: rest-server
+          image: restic/rest-server:0.14.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: rest
+              containerPort: 8000
+              protocol: TCP
+          env:
+            - name: DATA_DIRECTORY
+              value: /data
+            - name: PASSWORD_FILE
+              value: /run/secrets/backup/htpasswd
+            - name: OPTIONS
+              value: --append-only --private-repos
+          volumeMounts:
+            - name: repository
+              mountPath: /data
+            - name: credentials
+              mountPath: /run/secrets/backup
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          startupProbe:
+            tcpSocket:
+              port: rest
+            periodSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            tcpSocket:
+              port: rest
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            tcpSocket:
+              port: rest
+            periodSeconds: 30
+            timeoutSeconds: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: repository
+          persistentVolumeClaim:
+            claimName: iku-backup-repo
+        - name: credentials
+          secret:
+            secretName: iku-backup-credentials
+            defaultMode: 0440
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: iku-backup-server
+  namespace: iku-backup
+  labels:
+    app.kubernetes.io/name: iku-backup-server
+    app.kubernetes.io/part-of: iku
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: iku-backup-server
+  ports:
+    - name: rest
+      port: 8000
+      targetPort: rest
+      protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: iku-backup-server
+  namespace: iku-backup
+  labels:
+    app.kubernetes.io/part-of: iku
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: iku-backup-server
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: iku-backup-client
+      ports:
+        - protocol: TCP
+          port: 8000
+  egress: []
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: iku-backup-client
+  namespace: iku-backup
+  labels:
+    app.kubernetes.io/part-of: iku
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: iku-backup-client
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: iku-backup-server
+      ports:
+        - protocol: TCP
+          port: 8000
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: iku-backup
+  namespace: iku-backup
+  labels:
+    app.kubernetes.io/name: iku-backup-client
+    app.kubernetes.io/part-of: iku
+spec:
+  schedule: "17 3 * * *"
+  timeZone: Europe/Paris
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 1800
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    metadata:
+      labels:
+        app.kubernetes.io/name: iku-backup-client
+        app.kubernetes.io/part-of: iku
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 14400
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: iku-backup-client
+            app.kubernetes.io/part-of: iku
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          nodeSelector:
+            kubernetes.io/hostname: vps-4e5174e4
+          securityContext:
+            seccompProfile:
+              type: RuntimeDefault
+          initContainers:
+            - name: snapshot-sqlite
+              image: python:3.12-alpine
+              imagePullPolicy: IfNotPresent
+              command:
+                - python3
+                - -B
+                - /scripts/backup-sqlite.py
+              volumeMounts:
+                - name: storage
+                  mountPath: /source/storage
+                  readOnly: true
+                - name: auth-db
+                  mountPath: /source/auth-db
+                - name: n8n-db
+                  mountPath: /source/n8n-db
+                - name: nextcloud-db
+                  mountPath: /source/nextcloud-db
+                - name: k3s-db
+                  mountPath: /source/k3s-db
+                - name: sqlite-backups
+                  mountPath: /sqlite-backups
+                - name: script
+                  mountPath: /scripts
+                  readOnly: true
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+              securityContext:
+                runAsUser: 0
+                runAsGroup: 33
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
+                  add:
+                    - DAC_READ_SEARCH
+                    - DAC_OVERRIDE
+                    - CHOWN
+          containers:
+            - name: restic
+              image: restic/restic:0.19.1
+              imagePullPolicy: IfNotPresent
+              command:
+                - /bin/sh
+                - -ec
+              args:
+                - |
+                  if ! restic snapshots >/dev/null 2>&1; then
+                    restic init
+                  fi
+                  restic backup --host vps-4e5174e4 --tag iku --tag daily --quiet \
+                    --exclude '**/auth.sqlite3*' \
+                    --exclude '**/database.sqlite*' \
+                    --exclude '**/owncloud.db*' \
+                    --exclude /source/k3s-server/db \
+                    /source/storage /source/k3s-server /source/k3s-config /sqlite-backups
+              env:
+                - name: RESTIC_REPOSITORY
+                  value: rest:http://iku-backup-server.iku-backup.svc.cluster.local:8000/iku-backup
+                - name: RESTIC_REST_USERNAME
+                  value: iku-backup
+                - name: RESTIC_REST_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: iku-backup-credentials
+                      key: rest-server-password
+                - name: RESTIC_PASSWORD_FILE
+                  value: /run/secrets/backup/restic-password
+                - name: HOME
+                  value: /tmp
+              volumeMounts:
+                - name: storage
+                  mountPath: /source/storage
+                  readOnly: true
+                - name: k3s-server
+                  mountPath: /source/k3s-server
+                  readOnly: true
+                - name: k3s-config
+                  mountPath: /source/k3s-config
+                  readOnly: true
+                - name: sqlite-backups
+                  mountPath: /sqlite-backups
+                  readOnly: true
+                - name: credentials
+                  mountPath: /run/secrets/backup
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  cpu: 1000m
+                  memory: 1Gi
+              securityContext:
+                runAsUser: 0
+                runAsGroup: 0
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
+                  add:
+                    - DAC_READ_SEARCH
+          volumes:
+            - name: storage
+              hostPath:
+                path: /var/lib/rancher/k3s/storage
+                type: Directory
+            - name: auth-db
+              hostPath:
+                path: /var/lib/rancher/k3s/storage/pvc-0df6a381-ded4-495e-858e-ae7fd8751222_iku_iku-auth-data
+                type: Directory
+            - name: n8n-db
+              hostPath:
+                path: /var/lib/rancher/k3s/storage/pvc-0b822a9d-cdaf-4755-89e0-088068322123_iku_n8n-data
+                type: Directory
+            - name: k3s-server
+              hostPath:
+                path: /var/lib/rancher/k3s/server
+                type: Directory
+            - name: k3s-db
+              hostPath:
+                path: /var/lib/rancher/k3s/server/db
+                type: Directory
+            # SQLite WAL mode needs a writable shm lock file. The init container
+            # opens each database with mode=ro and mounts only database directories
+            # read-write; all other source trees stay read-only.
+            - name: nextcloud-db
+              hostPath:
+                path: /var/lib/rancher/k3s/storage/pvc-be0f54f4-c7ff-4a52-9dfa-491998581a26_iku_nextcloud-data-v2
+                type: Directory
+            - name: k3s-config
+              hostPath:
+                path: /etc/rancher/k3s
+                type: Directory
+            - name: sqlite-backups
+              emptyDir:
+                sizeLimit: 1Gi
+            - name: script
+              configMap:
+                name: iku-backup-sqlite
+                defaultMode: 0444
+            - name: credentials
+              secret:
+                secretName: iku-backup-credentials
+                defaultMode: 0440
+            - name: tmp
+              emptyDir:
+                sizeLimit: 1Gi

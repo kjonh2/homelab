@@ -1,0 +1,9 @@
+{
+  "$schema": "https://unpkg.com/wrangler@4.160.1/config-schema.json",
+  "name": "homelab",
+  "compatibility_date": "2026-11-12",
+  "assets": {
+    "directory": "./public-site/dist"
+  },
+  "previews": {}
+}

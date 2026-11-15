@@ -21,6 +21,7 @@ object GoogleSignInModern {
      * Initialize the Google Sign-In helper for modern flavor.
      * This replaces the default no-op implementation.
      */
+    @JvmStatic
     fun init() {
         googleSignInHelper = object : GoogleSignInHelper {
             override fun isAvailable(): Boolean = true

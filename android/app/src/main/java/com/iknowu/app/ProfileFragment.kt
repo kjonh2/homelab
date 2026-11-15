@@ -4,6 +4,7 @@ import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.os.Bundle
 import android.util.TypedValue
 import android.view.Gravity
@@ -48,7 +49,37 @@ class ProfileFragment : Fragment() {
         styleAvatar()
         renderNotifications()
 
+        binding.btnIkuConnect.setOnClickListener { connectIkuSession() }
+        renderIkuSessionStatus()
+
         binding.btnLogout.setOnClickListener { logout() }
+    }
+
+    private fun renderIkuSessionStatus() {
+        val saved = IkuAuthSessionStore.read(requireContext())
+        val expiry = saved?.optLong("expires_at", 0L) ?: 0L
+        binding.ikuAuthStatus.text = when {
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.M -> "Ligação Iku segura requer Android 6 ou superior."
+            expiry > System.currentTimeMillis() / 1000L -> "Sessão Iku ligada e guardada cifrada neste dispositivo."
+            saved != null -> "Sessão Iku expirada. Toca para renovar."
+            else -> "Sessão Iku ainda não ligada."
+        }
+    }
+
+    private fun connectIkuSession() {
+        val user = auth.currentUser
+        if (user == null) {
+            binding.ikuAuthStatus.text = "Inicia sessão na app antes de ligar ao Iku."
+            return
+        }
+        binding.btnIkuConnect.isEnabled = false
+        binding.ikuAuthStatus.text = "A verificar a conta Firebase e a ligar ao Iku…"
+        IkuAuthClient.connect(requireActivity(), user) { success, message ->
+            val currentBinding = _binding ?: return@connect
+            currentBinding.btnIkuConnect.isEnabled = true
+            currentBinding.ikuAuthStatus.text = message
+            if (!success) android.widget.Toast.makeText(requireContext(), message, android.widget.Toast.LENGTH_LONG).show()
+        }
     }
 
     // ---- Perfil (FirebaseAuth.currentUser) ----
@@ -144,9 +175,15 @@ class ProfileFragment : Fragment() {
 
     private fun logout() {
         auth.signOut()
-        val intent = Intent(requireContext(), LoginActivity::class.java)
-        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-        startActivity(intent)
+        binding.btnLogout.isEnabled = false
+        IkuAuthClient.logout(requireActivity()) {
+            activity?.let { host ->
+                val intent = Intent(host, LoginActivity::class.java)
+                intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                startActivity(intent)
+                host.finish()
+            }
+        }
     }
 
     private fun dp(v: Int): Int = TypedValue.applyDimension(

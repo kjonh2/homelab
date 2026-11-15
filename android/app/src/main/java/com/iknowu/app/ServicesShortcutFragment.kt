@@ -5,12 +5,15 @@ import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
+import android.text.InputType
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.GridLayout
+import android.widget.EditText
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import com.iknowu.app.databinding.FragmentServicesShortcutsBinding
@@ -42,6 +45,10 @@ class ServicesShortcutFragment : Fragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+        binding.btnDrisa.setOnClickListener {
+            startActivity(Intent(requireContext(), DrisaVoiceActivity::class.java))
+        }
+        binding.btnConfigurarServidor.setOnClickListener { configurarServidor() }
         popularGrelha()
     }
 
@@ -55,7 +62,7 @@ class ServicesShortcutFragment : Fragment() {
         val grid = binding.gridServicos
         grid.removeAllViews()
 
-        ServiceCatalog.servicos.forEach { servico ->
+        ServiceCatalog.servicos(requireContext()).forEach { servico ->
             val cardBinding = ServiceCardShortcutBinding.inflate(layoutInflater, grid, false)
             val card = cardBinding.root as FrameLayout
 
@@ -103,8 +110,7 @@ class ServicesShortcutFragment : Fragment() {
     /** Abre o URL do serviço no browser (ACTION_VIEW). */
     private fun abrirServico(servico: ServiceItem) {
         val url = servico.url
-        // Placeholder por preencher (TODO no ServiceCatalog) — avisa em vez de crashar.
-        if (url.contains("IP_DO_SERVIDOR") || url.isBlank()) {
+        if (url.isBlank()) {
             Toast.makeText(requireContext(), R.string.services_url_indisponivel, Toast.LENGTH_SHORT).show()
             return
         }
@@ -113,6 +119,39 @@ class ServicesShortcutFragment : Fragment() {
         } catch (_: ActivityNotFoundException) {
             Toast.makeText(requireContext(), R.string.services_sem_browser, Toast.LENGTH_SHORT).show()
         }
+    }
+
+    private fun configurarServidor() {
+        val input = EditText(requireContext()).apply {
+            hint = "https://vps.tailnet.ts.net"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+            setSingleLine(true)
+            setText(ServiceCatalog.serverBaseUrl(requireContext()))
+            setSelection(text.length)
+        }
+        AlertDialog.Builder(requireContext())
+            .setTitle(R.string.services_configurar_titulo)
+            .setMessage(R.string.services_configurar_descricao)
+            .setView(input)
+            .setPositiveButton(R.string.services_guardar) { _, _ ->
+                val value = input.text.toString().trim().trimEnd('/')
+                val uri = Uri.parse(value)
+                val valid = uri.scheme == "https" && !uri.host.isNullOrBlank() &&
+                    uri.userInfo.isNullOrBlank() && uri.path.isNullOrBlank() &&
+                    uri.query.isNullOrBlank() && uri.fragment.isNullOrBlank()
+                if (!valid) {
+                    Toast.makeText(requireContext(), R.string.services_url_invalido, Toast.LENGTH_LONG).show()
+                    return@setPositiveButton
+                }
+                ServiceCatalog.saveServerBaseUrl(requireContext(), value)
+                popularGrelha()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .setNeutralButton(R.string.services_limpar) { _, _ ->
+                ServiceCatalog.saveServerBaseUrl(requireContext(), "")
+                popularGrelha()
+            }
+            .show()
     }
 
     /** Ícone por serviço; novos serviços sem mapeamento caem no genérico. */

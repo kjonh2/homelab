@@ -4,6 +4,7 @@
     tools:overrideLibrary="com.google.firebase.auth, com.google.android.gms.common">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <application
         android:allowBackup="true"
@@ -29,6 +30,10 @@
         <!-- Register Activity -->
         <activity
             android:name="com.iknowu.app.RegisterActivity"
+            android:exported="false" />
+
+        <activity
+            android:name="com.iknowu.app.DrisaVoiceActivity"
             android:exported="false" />
 
         <!-- Main Activity (after login) -->

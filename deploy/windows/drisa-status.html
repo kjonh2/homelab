@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body { font-family: var(--font, system-ui); color: var(--foreground); background: transparent; margin: 0; padding: 10px; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; max-width: 640px; }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px; }
+.card h3 { margin: 0 0 8px; font-size: 13px; color: var(--accent); display: flex; align-items: center; gap: 6px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted-foreground); }
+.dot.on { background: #4ade80; box-shadow: 0 0 8px #4ade80aa; }
+.dot.speaking { background: #a78bfa; box-shadow: 0 0 10px #a78bffcc; }
+.ring { width: 64px; height: 64px; border-radius: 50%; border: 3px solid var(--border); display: flex; align-items: center; justify-content: center; margin: 0 auto 6px; transition: border-color .2s, box-shadow .2s; }
+.ring.on { border-color: #4ade80; box-shadow: 0 0 14px #4ade8066; }
+.ring.speaking { border-color: #a78bfa; box-shadow: 0 0 18px #a78bfa88; }
+.ring .lvl { font-size: 16px; font-weight: 600; color: var(--muted-foreground); }
+.bars { display: flex; gap: 3px; align-items: flex-end; height: 28px; justify-content: center; margin-bottom: 6px; }
+.bar { width: 5px; background: var(--accent); border-radius: 2px; height: 4px; transition: height .12s; }
+.meta { font-size: 11px; color: var(--muted-foreground); line-height: 1.5; min-height: 32px; }
+.meta b { color: var(--foreground); }
+</style>
+</head>
+<body>
+<div class="grid">
+  <div class="card" id="local">
+    <h3><span class="dot" id="local-dot"></span> PORTÁTIL (unsloth)</h3>
+    <div class="ring" id="local-ring"><span class="lvl" id="local-lvl">—</span></div>
+    <div class="bars" id="local-bars"></div>
+    <div class="meta" id="local-meta">A ligar…</div>
+  </div>
+  <div class="card" id="home">
+    <h3><span class="dot" id="home-dot"></span> HOMELAB (drisa-voice)</h3>
+    <div class="ring" id="home-ring"><span class="lvl" id="home-lvl">—</span></div>
+    <div class="bars" id="home-bars"></div>
+    <div class="meta" id="home-meta">A ligar…</div>
+  </div>
+</div>
+<script>
+const nb = 10;
+for (const id of ["local","home"]) {
+  const el = document.getElementById(id+"-bars");
+  for (let i=0;i<nb;i++) { const b=document.createElement("div"); b.className="bar"; el.appendChild(b); }
+}
+function bars(id, lvl, speaking) {
+  const bars = document.getElementById(id+"-bars").children;
+  for (let i=0;i<bars.length;i++) {
+    const base = Math.max(0, Math.min(28, lvl - i*2));
+    const h = speaking ? base + Math.random()*6 : 4 + Math.random()*3*(lvl>0?1:0);
+    bars[i].style.height = Math.max(4, Math.min(28, h)) + "px";
+    bars[i].style.opacity = lvl>0 ? (speaking?1:.55) : .25;
+  }
+}
+async function tick() {
+  try {
+    const r = await fetch("/status", {cache:"no-store"});
+    if (!r.ok) throw new Error("status unavailable");
+    const d = await r.json();
+    for (const [id, s] of [["local", d.local], ["home", d.homelab]]) {
+      const level = Number(s.vad) || 0;
+      const on = !!s.ativo, speaking = !!(s.fala || level > 25);
+      document.getElementById(id+"-dot").className = "dot " + (speaking ? "speaking" : on ? "on" : "");
+      document.getElementById(id+"-ring").className = "ring " + (speaking ? "speaking" : on ? "on" : "");
+      document.getElementById(id+"-lvl").textContent = level;
+      bars(id, level, speaking);
+      const meta = document.getElementById(id+"-meta");
+      meta.replaceChildren();
+      if (id === "local") {
+        meta.append(document.createTextNode(`${String(s.stt_engine || "STT")} · ${s.ult_ms ? `${Number(s.ult_ms)}ms` : "—"}`));
+        meta.append(document.createElement("br"));
+        const transcript = document.createElement("b");
+        transcript.textContent = String(s.ultimo_stt || "…").slice(0, 40);
+        meta.append(transcript);
+      } else {
+        meta.append(document.createTextNode("micro: "));
+        const microphone = document.createElement("b");
+        microphone.textContent = String(s.micro || "—");
+        meta.append(microphone, document.createElement("br"));
+        meta.append(document.createTextNode(on ? "24/7 ✓" : "sem ligação"));
+      }
+    }
+  } catch(e) {
+    document.getElementById("local-meta").textContent = "loop local desligado";
+    document.getElementById("home-meta").textContent = "estado indisponível";
+  }
+}
+setInterval(tick, 700); tick();
+</script>
+</body>
+</html>

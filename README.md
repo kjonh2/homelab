@@ -76,7 +76,7 @@ Homelab is designed to work everywhere. Pick your device:
 | **Linux (Docker)** | ✅ Ready | One-command script |
 | **Windows (Docker Desktop)** | ✅ Ready | One-command script |
 | **macOS (Docker Desktop)** | ✅ Ready | One-command script |
-| **Android** | 🔨 In development | App in development — see [`android/`](./android) |
+| **Android** | 🧪 Private testing | Native Iku app with Firebase sign-in, Iku session bridge, Drisa voice/model controls, files, and printer screens — see [`android/`](./android) |
 | **iOS / iPadOS** | 🔜 Coming | App in development |
 
 ---
@@ -151,11 +151,9 @@ curl -fsSL https://raw.githubusercontent.com/kjonh2/homelab/main/scripts/windows
 
 ---
 
-### 📱 Mobile (Coming Soon)
+### 📱 Android app (Private testing)
 
-When the mobile apps are ready, you will be able to set up and manage your entire homelab from your phone — no typing commands, no technical knowledge needed. Just tap, tap, done.
-
-> **The goal:** Your mom can have an app on her iPhone that connects to her homelab at home, giving her access to all these powerful tools from the palm of her hand.
+The native Iku Android app supports Firebase sign-in, the private Iku Auth session bridge, Drisa voice and model controls, service shortcuts, files, and printer screens. It is in private testing and is not distributed through the Play Store. See [`android/README.md`](./android/README.md) for build, install, and tailnet connection steps. iOS support is not available yet.
 
 ---
 
@@ -313,13 +311,7 @@ All data survives container restarts. For backups, see the [backup section](#bac
 
 ## 🌐 Access From Your Phone (and Anywhere)
 
-Once your homelab is running, you can access it from **any device**:
-
-1. **Same network:** Just open `http://<your-server-ip>:8787` in any browser
-2. **From anywhere:** Set up port forwarding on your router, or use a VPN
-3. **With your domain:** Point your DNS to your server's IP — Traefik handles the rest with automatic SSL
-
-Coming soon: **mobile apps** for Android and iOS that give you a native experience without needing to type URLs.
+The public Iku landing page is available at [iknowu.org](https://iknowu.org/). The authenticated Iku portal, model APIs, n8n, Nextcloud, and Drisa endpoints are private services; connect the device to the configured Tailscale tailnet before opening them. Do not expose these services by forwarding router ports. The Android app is in private testing; iOS is not available yet.
 
 ---
 
