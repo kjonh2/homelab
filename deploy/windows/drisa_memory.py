@@ -64,21 +64,75 @@ def _api_headers(key):
     return headers
 
 
+def _render_chat_template(template: str, props: dict[str, Any], messages: list[dict[str, Any]]) -> str:
+    """Render the model's own template when an OpenAI server lacks /apply-template."""
+    from jinja2 import nodes
+    from jinja2.ext import Extension, loopcontrols
+    from jinja2.sandbox import SandboxedEnvironment
+
+    class GenerationBlock(Extension):
+        tags = {"generation"}
+
+        def parse(self, parser):
+            token = next(parser.stream)
+            body = parser.parse_statements(["name:endgeneration"], drop_needle=True)
+            return nodes.CallBlock(self.call_method("_render"), [], [], body).set_lineno(token.lineno)
+
+        @staticmethod
+        def _render(caller):
+            return caller()
+
+    def raise_template_error(message):
+        raise ValueError(str(message))
+
+    environment = SandboxedEnvironment(extensions=[loopcontrols, GenerationBlock])
+    environment.globals["raise_exception"] = raise_template_error
+    rendered = environment.from_string(template).render(
+        messages=messages,
+        add_generation_prompt=True,
+        enable_thinking=False,
+        bos_token=props.get("bos_token") or "",
+        eos_token=props.get("eos_token") or "",
+        tools=None,
+    )
+    if not rendered:
+        raise ValueError("O template do modelo produziu um prompt vazio")
+    return rendered
+
+
 def _render_and_count(base_url, key, model, messages):
     headers = _api_headers(key)
     # OpenAI-compatible chat routes live below /v1, but llama.cpp's
     # tokenizer/template/context inspection routes are mounted at the server root.
     control_url = base_url[:-3] if base_url.endswith("/v1") else base_url
-    rendered = requests.post(control_url + "/apply-template", json={"model": model, "messages": messages}, headers=headers, timeout=15)
-    rendered.raise_for_status()
-    prompt = rendered.json()["prompt"]
-    tokenized = requests.post(control_url + "/tokenize", json={"model": model, "content": prompt, "add_special": True}, headers=headers, timeout=15)
+    props = None
+    try:
+        rendered = requests.post(control_url + "/apply-template", json={"model": model, "messages": messages}, headers=headers, timeout=15)
+        rendered.raise_for_status()
+        prompt = rendered.json()["prompt"]
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else None
+        if status not in (404, 405):
+            raise
+        props = requests.get(control_url + "/props", params={"model": model}, headers=headers, timeout=10)
+        props.raise_for_status()
+        props_body = props.json()
+        template = props_body.get("chat_template")
+        if isinstance(template, dict):
+            template = template.get("default") or next(iter(template.values()), None)
+        if not isinstance(template, str) or not template:
+            raise ValueError("O endpoint do modelo não disponibiliza um chat template")
+        prompt = _render_chat_template(template, props_body, messages)
+
+    # The rendered chat template already contains model special tokens.
+    tokenized = requests.post(control_url + "/tokenize", json={"model": model, "content": prompt, "add_special": props is None}, headers=headers, timeout=15)
     tokenized.raise_for_status()
     body = tokenized.json()
     token_count = len(body.get("tokens", []))
-    props = requests.get(control_url + "/props", params={"model": model}, headers=headers, timeout=10)
-    props.raise_for_status()
-    props_body = props.json()
+    if props is None:
+        props = requests.get(control_url + "/props", params={"model": model}, headers=headers, timeout=10)
+        props.raise_for_status()
+        props_body = props.json()
     context_size = int(props_body.get("n_ctx") or props_body.get("default_generation_settings", {}).get("n_ctx", 0))
     if not token_count or not context_size:
         raise ValueError("LFM não devolveu contagem de tokens ou limite de contexto")
@@ -196,16 +250,16 @@ def chat(user_text: str, *, system_prompt: str, base_url: str, key: str, model: 
             status = exc.response.status_code if exc.response is not None else None
             if status not in (404, 405):
                 raise
-            logger.warning("context inspection endpoint unavailable (HTTP %s); using recent history", status)
+            logger.warning("context measurement endpoint unavailable (HTTP %s); using saved summary only", status)
             summary_messages = [message for message in history[1:] if message.get("name") == "drisa_memory_summary"]
-            recent_turns = [message for message in history[1:] if message.get("role") in ("user", "assistant")][-4:]
-            messages = [history[0], *summary_messages, *recent_turns, {"role": "user", "content": user_text}]
+            messages = [history[0], *summary_messages, {"role": "user", "content": user_text}]
         except requests.RequestException as exc:
             raise
         except Exception as exc:
-            # With a live DB, fail closed on inability to measure: never send unbounded history.
-            logger.warning("context measurement/compaction failed (%s); using current short history", type(exc).__name__)
-            messages = [history[0], *history[-4:], {"role": "user", "content": user_text}]
+            # Without a trustworthy token count, preserve only the bounded summary.
+            logger.warning("context measurement/compaction failed (%s); using saved summary only", type(exc).__name__)
+            summary_messages = [message for message in history[1:] if message.get("name") == "drisa_memory_summary"]
+            messages = [history[0], *summary_messages, {"role": "user", "content": user_text}]
         logger.info("context usage before generation: %s/%s tokens including %s completion reserve", tokens if 'tokens' in locals() else -1, n_ctx, max_tokens)
         response = requests.post(
             base_url + "/chat/completions",

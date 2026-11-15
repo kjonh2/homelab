@@ -5,6 +5,48 @@ import drisa_memory
 
 
 class DrisaMemorySummaryTests(unittest.TestCase):
+    @patch.object(drisa_memory.requests, "get")
+    @patch.object(drisa_memory.requests, "post")
+    def test_unsloth_template_fallback_counts_exact_model_tokens(self, post, get):
+        apply_template = Mock()
+        apply_template.raise_for_status.side_effect = drisa_memory.requests.HTTPError(
+            response=Mock(status_code=404)
+        )
+        tokenized = Mock()
+        tokenized.json.return_value = {"tokens": [1, 2, 3, 4]}
+        post.side_effect = [apply_template, tokenized]
+        props = Mock()
+        props.json.return_value = {
+            "chat_template": (
+                "{% for message in messages %}<|{{ message['role'] }}|>"
+                "{% generation %}{{ message['content'] }}{% endgeneration %}"
+                "{% endfor %}{% if add_generation_prompt %}<|assistant|>{% endif %}"
+            ),
+            "default_generation_settings": {"n_ctx": 4096},
+        }
+        get.return_value = props
+        messages = [
+            {"role": "system", "content": "system"},
+            {"role": "user", "content": "Olá"},
+        ]
+
+        tokens, context = drisa_memory._render_and_count(
+            "http://pc/v1", "local-key", "lfm3", messages
+        )
+
+        self.assertEqual((tokens, context), (4, 4096))
+        get.assert_called_once_with(
+            "http://pc/props", params={"model": "lfm3"},
+            headers={"Content-Type": "application/json", "Authorization": "Bearer local-key"},
+            timeout=10,
+        )
+        token_request = post.call_args_list[1]
+        self.assertFalse(token_request.kwargs["json"]["add_special"])
+        self.assertEqual(
+            token_request.kwargs["json"]["content"],
+            "<|system|>system<|user|>Olá<|assistant|>",
+        )
+
     def test_summary_cursor_stops_before_turns_kept_in_context(self):
         archived_rows = [(11, "user"), (12, "assistant"), (13, "user"), (14, "assistant")]
 
@@ -88,14 +130,24 @@ class DrisaMemorySummaryTests(unittest.TestCase):
     @patch.object(drisa_memory, "_connect")
     @patch.object(drisa_memory, "_settings", return_value=({}, Mock()))
     @patch.object(drisa_memory.requests, "post")
-    def test_missing_context_inspection_route_keeps_recent_history(self, post, _settings, connect, _render, _schema):
+    def test_missing_context_inspection_route_uses_saved_summary_without_unmeasured_turns(self, post, _settings, connect, _render, _schema):
         conn = Mock()
+        cipher = Mock()
+        cipher.decrypt.side_effect = lambda value: {
+            b"summary-cipher": "Preferência guardada.".encode(),
+            b"user-cipher": "Pedido antigo.".encode(),
+            b"assistant-cipher": "Resposta antiga.".encode(),
+        }[value]
+        _settings.return_value = ({}, cipher)
         def execute(query, *_args):
             cursor = Mock()
             if "SELECT summary_ciphertext" in query:
-                cursor.fetchone.return_value = (b"", 0)
+                cursor.fetchone.return_value = (b"summary-cipher", 0)
             elif "SELECT id, role" in query:
-                cursor.fetchall.return_value = []
+                cursor.fetchall.return_value = [
+                    (1, "user", b"user-cipher"),
+                    (2, "assistant", b"assistant-cipher"),
+                ]
             return cursor
         conn.execute.side_effect = execute
         connect.return_value = conn
@@ -111,6 +163,7 @@ class DrisaMemorySummaryTests(unittest.TestCase):
         self.assertEqual(reply, "Resposta local.")
         self.assertEqual(post.call_args.kwargs["json"]["messages"], [
             {"role": "system", "content": "sistema"},
+            {"role": "system", "name": "drisa_memory_summary", "content": "Preferência guardada."},
             {"role": "user", "content": "Olá"},
         ])
         self.assertIs(post.call_args.kwargs["json"]["enable_thinking"], False)
