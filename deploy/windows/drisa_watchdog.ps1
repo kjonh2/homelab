@@ -151,6 +151,54 @@ function Ensure-DrisaVpsAudioTunnel {
     }
 }
 
+function Ensure-DrisaLocalModelServer {
+    $unslothExe = Join-Path $env:USERPROFILE '.unsloth\studio\bin\unsloth.exe'
+    $serverProcesses = @()
+    if (Get-Command Get-DrisaGamingModelServerProcesses -ErrorAction SilentlyContinue) {
+        $serverProcesses = @(Get-DrisaGamingModelServerProcesses)
+    }
+
+    $listener = Get-NetTCPConnection -State Listen -LocalAddress 127.0.0.1 -LocalPort 8888 -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($listener) {
+        if (@($serverProcesses | Where-Object { $_.ProcessId -eq $listener.OwningProcess }).Count -gt 0) { return }
+        Write-DrisaWatchdogLog 'Unsloth fallback skipped: loopback port 8888 is owned by another process'
+        return
+    }
+    if ($serverProcesses.Count -gt 0) {
+        Write-DrisaWatchdogLog 'Unsloth fallback process exists but its loopback API is not listening; leaving it alone'
+        return
+    }
+    if (-not (Test-Path -LiteralPath $unslothExe)) {
+        $unsloth = Get-Command unsloth -ErrorAction SilentlyContinue
+        if (-not $unsloth) { $unsloth = Get-Command unsloth.cmd -ErrorAction SilentlyContinue }
+        if ($unsloth) { $unslothExe = $unsloth.Source }
+    }
+    if (-not (Test-Path -LiteralPath $unslothExe)) {
+        Write-DrisaWatchdogLog 'Unsloth fallback not started: Unsloth Studio executable was not found'
+        return
+    }
+
+    try {
+        $started = Start-Process -FilePath $unslothExe -ArgumentList @(
+            'studio', '-H', '127.0.0.1', '-p', '8888', '--no-cloudflare'
+        ) -WindowStyle Hidden -PassThru -WorkingDirectory $drisaDir
+        Start-Sleep -Milliseconds 1200
+        $listener = Get-NetTCPConnection -State Listen -LocalAddress 127.0.0.1 -LocalPort 8888 -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        $serverProcesses = @(Get-DrisaGamingModelServerProcesses)
+        if ($listener -and @($serverProcesses | Where-Object { $_.ProcessId -eq $listener.OwningProcess }).Count -gt 0) {
+            Write-DrisaWatchdogLog "Unsloth fallback active pid=$($listener.OwningProcess) on 127.0.0.1:8888"
+        } elseif ($listener) {
+            Write-DrisaWatchdogLog 'Unsloth fallback launch skipped: another process took loopback port 8888'
+        } else {
+            Write-DrisaWatchdogLog "Unsloth fallback launch requested pid=$($started.Id); API is not listening yet"
+        }
+    } catch {
+        Write-DrisaWatchdogLog "Unsloth fallback launch error: $($_.Exception.Message)"
+    }
+}
+
 function Get-DrisaProcesses([string]$ScriptPath) {
     Get-CimInstance Win32_Process | Where-Object {
         $_.ProcessId -ne $PID -and
@@ -216,6 +264,8 @@ try {
         if (Get-Command Stop-DrisaGamingWorld -ErrorAction SilentlyContinue) {
             Stop-DrisaGamingWorld
         }
+    } else {
+        Ensure-DrisaLocalModelServer
     }
 
     if ($env:DRISA_STT_HOST -eq 'vps' -or $env:DRISA_TTS_HOST -eq 'vps') {
