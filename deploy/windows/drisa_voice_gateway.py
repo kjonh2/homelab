@@ -904,7 +904,7 @@ def llm_reply(text: str) -> str:
                 headers["Authorization"] = f"Bearer {key}"
             payload = {"model": model, "messages": [
                 {"role": "system", "content": system_prompt}, {"role": "user", "content": text}],
-                "max_tokens": 64, "temperature": 0.7}
+                "max_tokens": 64, "temperature": 0.7, "enable_thinking": False}
             response = requests.post(f"{base_url}/chat/completions", json=payload, headers=headers, timeout=(5, timeout_seconds))
             response.raise_for_status()
             return prepare_spoken_text(response.json()["choices"][0]["message"]["content"])

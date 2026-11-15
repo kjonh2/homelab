@@ -75,6 +75,7 @@ class DrisaMemorySummaryTests(unittest.TestCase):
             )
 
         self.assertEqual(post.call_args.kwargs["timeout"], 45)
+        self.assertIs(post.call_args.kwargs["json"]["enable_thinking"], False)
         conn.rollback.assert_called_once()
         conn.close.assert_called_once()
 
@@ -112,6 +113,7 @@ class DrisaMemorySummaryTests(unittest.TestCase):
             {"role": "system", "content": "sistema"},
             {"role": "user", "content": "Olá"},
         ])
+        self.assertIs(post.call_args.kwargs["json"]["enable_thinking"], False)
 
 
 if __name__ == "__main__":

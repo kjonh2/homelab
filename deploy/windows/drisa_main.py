@@ -808,6 +808,7 @@ class DrisaAssistant:
                             ],
                             "max_tokens": output_budget,
                             "temperature": temperature,
+                            "enable_thinking": False,
                         }).encode("utf-8")
                         try:
                             req = urllib.request.Request(

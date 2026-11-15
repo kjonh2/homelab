@@ -207,7 +207,12 @@ def chat(user_text: str, *, system_prompt: str, base_url: str, key: str, model: 
             logger.warning("context measurement/compaction failed (%s); using current short history", type(exc).__name__)
             messages = [history[0], *history[-4:], {"role": "user", "content": user_text}]
         logger.info("context usage before generation: %s/%s tokens including %s completion reserve", tokens if 'tokens' in locals() else -1, n_ctx, max_tokens)
-        response = requests.post(base_url + "/chat/completions", json={"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature}, headers=_api_headers(key), timeout=request_timeout)
+        response = requests.post(
+            base_url + "/chat/completions",
+            json={"model": model, "messages": messages, "max_tokens": max_tokens,
+                  "temperature": temperature, "enable_thinking": False},
+            headers=_api_headers(key), timeout=request_timeout,
+        )
         response.raise_for_status()
         reply = spoken_cleaner(response.json()["choices"][0]["message"]["content"])
         if reply:
