@@ -45,12 +45,17 @@ class DrisaVoiceActivity : AppCompatActivity() {
     }
     private var socket: WebSocket? = null
     private var authenticated = false
+    @Volatile private var reconnectEnabled = false
+    private var reconnectAttempt = 0
     private var recorder: AudioRecord? = null
     private var replyPlayer: MediaPlayer? = null
     private var replyAudioFile: File? = null
     private var recordThread: Thread? = null
     private val recording = AtomicBoolean(false)
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val reconnectTask = Runnable {
+        if (reconnectEnabled && socket == null && !isFinishing && !isDestroyed) connect()
+    }
     private val audioResponseTimeout = Runnable {
         setStatus("A resposta da Drisa demorou demasiado nesta etapa. Tenta novamente.")
     }
@@ -187,6 +192,8 @@ class DrisaVoiceActivity : AppCompatActivity() {
     }
 
     private fun connect() {
+        reconnectEnabled = true
+        mainHandler.removeCallbacks(reconnectTask)
         val url = endpoint.text.toString().trim()
         val id = deviceId.text.toString().trim()
         val secret = token.text.toString().ifBlank {
@@ -235,7 +242,11 @@ class DrisaVoiceActivity : AppCompatActivity() {
                             runOnUiThread {
                                 setStatus(if (authenticated) "Ligada e autenticada. Toca no botão para gravar uma mensagem." else "A gateway não autorizou este dispositivo. Confirma a allowlist.")
                                 updateButtons()
-                                if (authenticated) requestModelCatalog()
+                                if (authenticated) {
+                                    reconnectAttempt = 0
+                                    mainHandler.removeCallbacks(reconnectTask)
+                                    requestModelCatalog()
+                                }
                             }
                         }
                         "models_catalog" -> runOnUiThread { showModelCatalog(message) }
@@ -266,34 +277,45 @@ class DrisaVoiceActivity : AppCompatActivity() {
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                authenticated = false
-                socket = null
-                runOnUiThread {
-                    clearAudioResponseTimeout()
-                    val details = listOfNotNull(
-                        response?.let { "HTTP ${it.code}" },
-                        t.javaClass.simpleName,
-                        t.message?.takeIf { it.isNotBlank() },
-                    ).joinToString(": ")
-                    setStatus("Falha na ligação ($details). Confirma o Tailscale e o endereço da gateway.")
-                    updateButtons()
-                }
+                val details = listOfNotNull(
+                    response?.let { "HTTP ${it.code}" },
+                    t.javaClass.simpleName,
+                    t.message?.takeIf { it.isNotBlank() },
+                ).joinToString(": ")
+                scheduleReconnect(webSocket, "Falha na ligação ($details).")
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                authenticated = false
-                socket = null
-                runOnUiThread {
-                    clearAudioResponseTimeout()
-                    setStatus("Ligação terminada.")
-                    updateButtons()
-                }
+                scheduleReconnect(webSocket, "Ligação terminada.")
             }
         })
         updateButtons()
     }
 
+    private fun scheduleReconnect(webSocket: WebSocket, reason: String) {
+        if (socket !== webSocket) return
+        socket = null
+        authenticated = false
+        val delaySeconds = (1 shl reconnectAttempt.coerceAtMost(5)).coerceAtMost(30)
+        reconnectAttempt += 1
+        mainHandler.post {
+            if (isFinishing || isDestroyed) return@post
+            clearAudioResponseTimeout()
+            updateButtons()
+            if (reconnectEnabled && !isFinishing && !isDestroyed) {
+                setStatus("$reason A tentar novamente em ${delaySeconds}s.")
+                mainHandler.removeCallbacks(reconnectTask)
+                mainHandler.postDelayed(reconnectTask, delaySeconds * 1000L)
+            } else {
+                setStatus(reason)
+            }
+        }
+    }
+
     private fun disconnect() {
+        reconnectEnabled = false
+        reconnectAttempt = 0
+        mainHandler.removeCallbacks(reconnectTask)
         clearAudioResponseTimeout()
         stopRecording(send = false)
         authenticated = false
