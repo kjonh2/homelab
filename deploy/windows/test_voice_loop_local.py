@@ -15,6 +15,17 @@ import requests
 
 
 class VoiceLoopTests(unittest.TestCase):
+    def test_desktop_turn_uses_authenticated_shared_gateway_and_plays_returned_audio(self):
+        played_bytes = []
+        with (
+            patch.object(voice, "submit_text_turn", return_value=b"RIFF-audio") as submit,
+            patch.object(voice, "tocar", side_effect=lambda path: played_bytes.append(Path(path).read_bytes())) as play,
+        ):
+            voice.gateway_text_turn("Qual é o estado da VPS?")
+        submit.assert_called_once_with("Qual é o estado da VPS?")
+        self.assertEqual(played_bytes, [b"RIFF-audio"])
+        self.assertFalse(Path(play.call_args.args[0]).exists())
+
     def test_gaming_stt_uses_vps_first_then_homelab_parakeet_on_failure(self):
         old = (voice.STT_URL, voice.STT_MODEL, voice.STT_FALLBACK_URL, voice.STT_FALLBACK_MODEL)
         voice.STT_URL = "http://127.0.0.1:8767/v1"

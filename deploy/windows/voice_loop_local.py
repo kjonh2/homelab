@@ -10,6 +10,7 @@ _here = os.path.dirname(os.path.abspath(__file__))
 _venv_sp = os.path.join(_here, "venv", "Lib", "site-packages")
 if os.path.isdir(_venv_sp) and _venv_sp not in sys.path:
     sys.path.insert(0, _venv_sp)
+from drisa_gateway_client import submit_text_turn
 BASE_DIR = Path(os.environ.get("DRISA_HOME", Path.home() / "workspace" / "drisa")).expanduser().resolve()
 BASE_DIR.mkdir(parents=True, exist_ok=True)
 BRIDGE_DIR = str(BASE_DIR) + os.sep
@@ -296,6 +297,20 @@ def falar(texto):
         except OSError:
             pass
 
+def gateway_text_turn(texto):
+    """Send desktop speech through the shared authenticated, memory-backed gateway."""
+    wav_bytes = submit_text_turn(texto)
+    with tempfile.NamedTemporaryFile(suffix=".wav", prefix="drisa-gateway-", delete=False) as out:
+        wav_path = out.name
+        out.write(wav_bytes)
+    try:
+        tocar(wav_path)
+    finally:
+        try:
+            os.remove(wav_path)
+        except OSError:
+            pass
+
 def pipeline(samples, mic_name):
     wav_path = None
     with _lock:
@@ -325,17 +340,10 @@ def pipeline(samples, mic_name):
         with _lock:
             STATE["local"]["ultimo_stt"] = txt
             STATE["local"]["ult_ms"] = int(t_stt*1000)
-        with open(BRIDGE_DIR + "drisa_text.tmp", "w", encoding="utf-8") as f:
-            f.write(txt)
         try:
-            resp = llm(txt)
-            resp = prepare_spoken_text(resp)
-            if resp:
-                with open(BRIDGE_DIR + "drisa_response.tmp", "w", encoding="utf-8") as f:
-                    f.write(resp)
-                falar(resp)
+            gateway_text_turn(txt)
         except Exception as e:
-            log(f"LLM/TTS falhou: {e}")
+            log(f"Gateway de conversa falhou: {type(e).__name__}: {e}")
     except Exception as e:
         log(f"pipeline falhou: {e}")
     finally:

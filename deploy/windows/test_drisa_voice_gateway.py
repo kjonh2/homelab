@@ -707,6 +707,110 @@ class AudioPayloadTests(unittest.TestCase):
 
 
 class GatewayAsyncAudioTests(unittest.IsolatedAsyncioTestCase):
+    async def test_publish_completed_turn_broadcasts_without_recalling_llm(self):
+        config = {
+            "allowlist": ["kiko-pc"],
+            "policies": {"kiko-pc": {"transcribe": True, "reply": True}},
+            "unknown": {"transcribe": False, "reply": False},
+        }
+
+        class FakeWebSocket:
+            remote_address = "test"
+
+            def __init__(self, messages=()):
+                self.messages = iter(messages)
+                self.sent = []
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                try:
+                    return next(self.messages)
+                except StopIteration:
+                    raise StopAsyncIteration
+
+            async def send(self, message):
+                self.sent.append(json.loads(message))
+
+        source = FakeWebSocket([
+            json.dumps({"type": "hello", "device_id": "kiko-pc", "user": "Kiko", "token": "test-token"}),
+            json.dumps({"type": "publish", "text": "Qual é o estado da VPS?", "reply": "A VPS está operacional."}),
+        ])
+        android = FakeWebSocket()
+        gateway.ACTIVE_CLIENTS.add(android)
+        try:
+            with (
+                patch.object(gateway, "load_config", return_value=config),
+                patch.object(gateway, "load_token", return_value="test-token"),
+                patch.object(gateway, "log_to_obsidian"),
+                patch.object(gateway, "tts_kokoro", return_value=b"RIFF-audio"),
+                patch.object(gateway, "llm_reply") as llm,
+                patch.object(gateway, "send_to_drisa") as bridge,
+            ):
+                await asyncio.wait_for(gateway.handle_client(source), timeout=2)
+        finally:
+            gateway.ACTIVE_CLIENTS.discard(android)
+
+        llm.assert_not_called()
+        bridge.assert_not_called()
+        self.assertEqual([m["type"] for m in android.sent], ["transcript", "reply", "processing", "tts"])
+        self.assertEqual(android.sent[0]["text"], "Qual é o estado da VPS?")
+        self.assertEqual(android.sent[1]["text"], "A VPS está operacional.")
+
+    async def test_text_turn_uses_shared_pipeline_and_broadcasts_to_android_clients(self):
+        config = {
+            "allowlist": ["kiko-pc"],
+            "policies": {"kiko-pc": {"transcribe": True, "reply": True}},
+            "unknown": {"transcribe": False, "reply": False},
+        }
+
+        class FakeWebSocket:
+            remote_address = "test"
+
+            def __init__(self, messages=()):
+                self.messages = iter(messages)
+                self.sent = []
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                try:
+                    return next(self.messages)
+                except StopIteration:
+                    raise StopAsyncIteration
+
+            async def send(self, message):
+                self.sent.append(json.loads(message))
+
+        source = FakeWebSocket([
+            json.dumps({"type": "hello", "device_id": "kiko-pc", "user": "Kiko", "token": "test-token"}),
+            json.dumps({"type": "text", "text": "Qual é o estado da VPS?"}),
+        ])
+        android = FakeWebSocket()
+        gateway.ACTIVE_CLIENTS.add(android)
+        try:
+            with (
+                patch.object(gateway, "load_config", return_value=config),
+                patch.object(gateway, "load_token", return_value="test-token"),
+                patch.object(gateway, "log_to_obsidian"),
+                patch.object(gateway, "send_to_drisa") as bridge_input,
+                patch.object(gateway, "llm_reply", return_value="A VPS está operacional.") as llm,
+                patch.object(gateway, "send_reply_to_world") as bridge_reply,
+                patch.object(gateway, "tts_kokoro", return_value=b"RIFF-audio"),
+            ):
+                await asyncio.wait_for(gateway.handle_client(source), timeout=2)
+        finally:
+            gateway.ACTIVE_CLIENTS.discard(android)
+
+        self.assertEqual(source.sent[0]["type"], "auth")
+        self.assertEqual(bridge_input.call_args.args[0], "Qual é o estado da VPS?")
+        self.assertEqual(bridge_reply.call_args.args[0], "A VPS está operacional.")
+        llm.assert_called_once_with("Qual é o estado da VPS?")
+        self.assertEqual([m["type"] for m in android.sent], ["transcript", "processing", "reply", "processing", "tts"])
+        self.assertEqual(android.sent[-1]["audio_b64"], base64.b64encode(b"RIFF-audio").decode())
+
     async def test_invalid_reauthentication_revokes_model_access(self):
         config = {
             "allowlist": ["trusted-device", "other-device"],

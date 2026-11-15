@@ -14,7 +14,11 @@ Medição feita em 2026-11-11 no nó `vps-4e5174e4`, enquanto portal, n8n, Nextc
 
 ## Decisão operacional
 
-Esta VPS suporta os serviços de portal, automação e cloud observados junto com **um servidor de modelo LFM3**. O modelo Omni é o servidor atualmente implantado. Os números medidos não provam que os modelos Omni e texto possam servir pedidos simultaneamente; com 8 GiB e sem swap, manter apenas um modelo ativo é a configuração conservadora.
+Esta VPS suporta os serviços de portal, automação e cloud observados junto com **um servidor de modelo LFM3**. As variantes Omni, texto e uncensored podem ser selecionadas, mas os números medidos não provam que possam servir pedidos simultaneamente; com 8 GiB e sem swap, manter apenas um modelo ativo é a configuração conservadora. O modelo de texto atualmente selecionado é `lfm3-uncensored`.
+
+O endpoint LLM atual é um serviço `llama.cpp` privado que serve GGUFs do LFM3/Unsloth, com um modelo residente por vez. Não é o Unsloth Studio. O Studio pode fazer chat CPU com GGUF, mas a documentação oficial reserva treino e exportação para GPU; a VPS não tem GPU e já opera perto do limite de memória quando Kokoro está ativo. Por isso, não se instala um segundo servidor Studio em paralelo: uma migração só deve avançar depois de medir espaço de memória ou aumentar os recursos da VPS. [Unsloth Studio](https://github.com/unslothai/unsloth#unsloth-studio-web-ui) · [requisitos oficiais](https://unsloth.ai/docs/get-started/fine-tuning-for-beginners/unsloth-requirements).
+
+Reverificação live em 2026-11-15 05:42 Europe/Paris: `free -h` reportou 649 MiB disponíveis; `kubectl top node` mostrou 6746 MiB usados (87%) e 2224m CPU (55%). O áudio VPS usava 2978 MiB e o servidor LFM3 1248 MiB. LFM3, Drisa audio VPS, Nextcloud, n8n e portal estavam `1/1 Ready`. Este estado não tem margem para acrescentar uma segunda instância Unsloth Studio com segurança.
 
 Em 2026-11-12, a API autenticada `/models` mostrou `lfm3-uncensored` carregado; `/health` e `/models` responderam HTTP 200. A configuração da Drisa aponta para esta API da VPS. Este estado substitui a nota anterior sobre o modelo Omni em execução; Omni e texto continuam a ser opções selecionáveis, com apenas um modelo residente de cada vez.
 

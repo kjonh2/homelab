@@ -44,10 +44,107 @@ MAX_WEBSOCKET_MESSAGE_BYTES = 8 * 1024 * 1024
 STT_TIMEOUT_SECONDS = 210
 LLM_TIMEOUT_SECONDS = 120
 TTS_TIMEOUT_SECONDS = 150
+ACTIVE_CLIENTS = set()
 
 
 class AudioBackendBusyError(RuntimeError):
     """The audio server may still be processing the previous inference."""
+
+
+async def broadcast_event(source, message):
+    """Send a Drisa turn event to its origin and every authenticated client."""
+    encoded = json.dumps(message, ensure_ascii=False)
+    recipients = set(ACTIVE_CLIENTS)
+    recipients.add(source)
+    for client in recipients:
+        try:
+            await client.send(encoded)
+        except Exception:
+            ACTIVE_CLIENTS.discard(client)
+
+
+async def process_text_turn(ws, device_id, user, text, policy):
+    text = text.strip()[:4000]
+    if not text:
+        await ws.send(json.dumps({"type": "audio_error", "message": "A transcrição ficou vazia."}, ensure_ascii=False))
+        return
+    await asyncio.to_thread(log_to_obsidian, device_id, user, text)
+    await broadcast_event(ws, {"type": "transcript", "text": text})
+    if not policy.get("reply"):
+        await ws.send(json.dumps({"type": "audio_error", "message": "A resposta da Drisa não está autorizada para este dispositivo."}, ensure_ascii=False))
+        return
+    await broadcast_event(ws, {
+        "type": "processing", "stage": "llm",
+        "message": "Transcrição recebida; a Drisa está a preparar a resposta."
+    })
+    await asyncio.to_thread(send_to_drisa, text, user)
+    try:
+        reply = await asyncio.wait_for(asyncio.to_thread(llm_reply, text), timeout=LLM_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        await broadcast_event(ws, {"type": "audio_error", "message": "A resposta do modelo demorou demasiado. Tenta novamente."})
+        return
+    except Exception:
+        await broadcast_event(ws, {"type": "audio_error", "message": "Não consegui preparar a resposta agora."})
+        return
+    reply = reply.strip() if isinstance(reply, str) else ""
+    if not reply:
+        await broadcast_event(ws, {"type": "audio_error", "message": "Não consegui preparar a resposta agora."})
+        return
+
+    await asyncio.to_thread(send_reply_to_world, reply)
+    await asyncio.to_thread(log_to_obsidian, device_id, user, reply, "drisa")
+    await broadcast_event(ws, {"type": "reply", "text": reply})
+    await broadcast_event(ws, {
+        "type": "processing", "stage": "tts", "message": "Resposta pronta; a gerar voz Kokoro."
+    })
+    try:
+        audio = await asyncio.wait_for(asyncio.to_thread(tts_kokoro, reply), timeout=TTS_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        await broadcast_event(ws, {"type": "audio_error", "message": "A geração de voz Kokoro demorou demasiado."})
+        return
+    except Exception:
+        await broadcast_event(ws, {"type": "audio_error", "message": "A Drisa respondeu, mas não conseguiu gerar o áudio Kokoro."})
+        return
+    if not audio:
+        await broadcast_event(ws, {"type": "audio_error", "message": "A Drisa respondeu, mas não conseguiu gerar o áudio Kokoro."})
+        return
+    await broadcast_event(ws, {
+        "type": "tts", "audio_b64": base64.b64encode(audio).decode(), "format": "wav_24000"
+    })
+
+
+async def publish_completed_turn(ws, device_id, user, text, reply, policy):
+    """Relay a desktop turn that already passed through shared PostgreSQL memory."""
+    text = text.strip()[:4000]
+    reply = reply.strip()[:4000]
+    if not text or not reply:
+        await ws.send(json.dumps({"type": "audio_error", "message": "Transcrição ou resposta vazia."}, ensure_ascii=False))
+        return
+    if not policy.get("reply"):
+        await ws.send(json.dumps({"type": "audio_error", "message": "A resposta da Drisa não está autorizada para este dispositivo."}, ensure_ascii=False))
+        return
+
+    await asyncio.to_thread(log_to_obsidian, device_id, user, text)
+    await asyncio.to_thread(log_to_obsidian, device_id, user, reply, "drisa")
+    await broadcast_event(ws, {"type": "transcript", "text": text})
+    await broadcast_event(ws, {"type": "reply", "text": reply})
+    await broadcast_event(ws, {
+        "type": "processing", "stage": "tts", "message": "Resposta pronta; a gerar voz Kokoro."
+    })
+    try:
+        audio = await asyncio.wait_for(asyncio.to_thread(tts_kokoro, reply), timeout=TTS_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        await broadcast_event(ws, {"type": "audio_error", "message": "A geração de voz Kokoro demorou demasiado."})
+        return
+    except Exception:
+        await broadcast_event(ws, {"type": "audio_error", "message": "A Drisa respondeu, mas não conseguiu gerar o áudio Kokoro."})
+        return
+    if not audio:
+        await broadcast_event(ws, {"type": "audio_error", "message": "A Drisa respondeu, mas não conseguiu gerar o áudio Kokoro."})
+        return
+    await broadcast_event(ws, {
+        "type": "tts", "audio_b64": base64.b64encode(audio).decode(), "format": "wav_24000"
+    })
 
 RECORDINGS.mkdir(exist_ok=True)
 VAULT.mkdir(parents=True, exist_ok=True)
@@ -998,6 +1095,7 @@ async def handle_client(ws):
 
         if mtype == "hello":
             # A new handshake must never inherit an earlier authenticated state.
+            ACTIVE_CLIENTS.discard(ws)
             authed = False
             device_id = str(msg.get("device_id", "unknown"))[:64]
             user = str(msg.get("user", device_id))[:64]
@@ -1009,9 +1107,36 @@ async def handle_client(ws):
             in_list = device_id in cfg["allowlist"]
             pol = cfg["policies"].get(device_id, cfg["unknown"]) if in_list else cfg["unknown"]
             authed = in_list
+            if authed:
+                ACTIVE_CLIENTS.add(ws)
             log_to_obsidian(device_id, user,
                             f"ligado (allowlist={in_list})", "session")
             await ws.send(json.dumps({"type": "auth", "ok": in_list, "policy": pol}))
+            continue
+
+        if mtype == "text":
+            if not authed:
+                await ws.send(json.dumps({"type": "audio_error", "message": "Autentica o dispositivo antes de enviar texto."}, ensure_ascii=False))
+                continue
+            text = msg.get("text")
+            if not isinstance(text, str):
+                await ws.send(json.dumps({"type": "audio_error", "message": "Texto inválido."}, ensure_ascii=False))
+                continue
+            await process_text_turn(ws, device_id, user, text, cfg["policies"].get(device_id, cfg["unknown"]))
+            continue
+
+        if mtype == "publish":
+            if not authed:
+                await ws.send(json.dumps({"type": "audio_error", "message": "Autentica o dispositivo antes de publicar a conversa."}, ensure_ascii=False))
+                continue
+            text, reply = msg.get("text"), msg.get("reply")
+            if not isinstance(text, str) or not isinstance(reply, str):
+                await ws.send(json.dumps({"type": "audio_error", "message": "Transcrição ou resposta inválida."}, ensure_ascii=False))
+                continue
+            await publish_completed_turn(
+                ws, device_id, user, text, reply,
+                cfg["policies"].get(device_id, cfg["unknown"]),
+            )
             continue
 
         if mtype in ("models_list", "models_load"):
@@ -1080,59 +1205,13 @@ async def handle_client(ws):
                 await report_error("MOSS e Parakeet não conseguiram transcrever o áudio.")
                 continue
 
-            await asyncio.to_thread(log_to_obsidian, device_id, user, text)
-            await ws.send(json.dumps({"type": "transcript", "text": text, "file": wav_path.name}, ensure_ascii=False))
-            if not pol.get("reply"):
-                await report_error("A resposta da Drisa não está autorizada para este dispositivo.")
-                continue
-
-            await ws.send(json.dumps({
-                "type": "processing", "stage": "llm", "message": "Transcrição recebida; a Drisa está a preparar a resposta."
-            }, ensure_ascii=False))
-            await asyncio.to_thread(send_to_drisa, text, user)
-            try:
-                reply = await asyncio.wait_for(
-                    asyncio.to_thread(llm_reply, text), timeout=LLM_TIMEOUT_SECONDS
-                )
-            except asyncio.TimeoutError:
-                await report_error("A resposta do modelo demorou demasiado. Tenta novamente.")
-                continue
-            except Exception:
-                await report_error("Não consegui preparar a resposta agora.")
-                continue
-            reply = reply.strip() if isinstance(reply, str) else ""
-            if not reply:
-                await report_error("Não consegui preparar a resposta agora.")
-                continue
-
-            await asyncio.to_thread(send_reply_to_world, reply)
-            await asyncio.to_thread(log_to_obsidian, device_id, user, reply, "drisa")
-            await ws.send(json.dumps({"type": "reply", "text": reply}, ensure_ascii=False))
-            await ws.send(json.dumps({
-                "type": "processing", "stage": "tts", "message": "Resposta pronta; a gerar voz Kokoro."
-            }, ensure_ascii=False))
-            try:
-                audio = await asyncio.wait_for(
-                    asyncio.to_thread(tts_kokoro, reply), timeout=TTS_TIMEOUT_SECONDS
-                )
-            except asyncio.TimeoutError:
-                await report_error("A geração de voz Kokoro demorou demasiado.")
-                continue
-            except Exception:
-                await report_error("A Drisa respondeu, mas não conseguiu gerar o áudio Kokoro.")
-                continue
-            if not audio:
-                await report_error("A Drisa respondeu, mas não conseguiu gerar o áudio Kokoro.")
-                continue
-            await ws.send(json.dumps({
-                "type": "tts", "audio_b64": base64.b64encode(audio).decode(),
-                "format": "wav_24000"
-            }))
+            await process_text_turn(ws, device_id, user, text, pol)
         # type "ping" → pong
         if mtype == "ping":
             await ws.send(json.dumps({"type": "pong"}))
 
     print(f"[gateway] {peer} desligou ({device_id})")
+    ACTIVE_CLIENTS.discard(ws)
 
 
 async def main():

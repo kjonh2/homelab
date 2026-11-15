@@ -9,6 +9,7 @@ $source = $PSScriptRoot
 $files = @(
     'audio_processor.py',
     'drisa-status.html',
+    'drisa_gateway_client.py',
     'drisa_main.py',
     'drisa_log_rotation.py',
     'drisa_memory.py',

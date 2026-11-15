@@ -25,6 +25,7 @@ from typing import Optional, Dict, Any
 # Add current directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from drisa_speech_text import is_utterance_echo, prepare_spoken_text
+from drisa_gateway_client import publish_completed_turn
 from drisa_log_rotation import create_rotating_file_handler
 
 # Import our modules
@@ -620,46 +621,23 @@ class DrisaAssistant:
                     if response_text:
                         logger.info(f"Response: '{response_text}'")
 
-                        # Synthesize response
-                        logger.info("Starting speech synthesis...")
-                        # Anti-eco: descarta a captura do micro enquanto a Drisa fala
+                        # The LLM already used shared PostgreSQL memory in process_command.
+                        # Publish that exact turn so connected app clients receive it too.
                         try:
                             self.audio_processor.set_muted(True)
                         except Exception:
                             pass
                         try:
-                            tts_result = self.speech_processor.synthesize_speech(response_text, language)
+                            publish_completed_turn(transcript_text, response_text)
+                            logger.info("Published desktop transcript and reply to connected Drisa clients")
+                        except Exception as e:
+                            logger.error("Could not publish desktop turn to the Drisa gateway: %s", type(e).__name__)
                         finally:
                             try:
                                 self.audio_processor.set_muted(False)
                             except Exception:
                                 pass
                             self._ignore_audio_until = time.monotonic() + 1.5
-
-                        if tts_result["success"]:
-                            logger.info(f"TTS successful: {tts_result['audio_file_path']}")
-                            # In a real implementation, we would play this audio
-                            # For now, we just log it
-                            self.play_audio_response(tts_result["audio_file_path"])
-                        else:
-                            logger.error(f"TTS failed: {tts_result['error']}")
-
-                            # Fallback to eSpeak if Deepgram failed
-                            if tts_result.get("provider") == "deepgram" and self.config["tts"]["deepgram_fallback"]:
-                                logger.info("Falling back to eSpeak NG for TTS")
-                                try:
-                                    fallback_result = self.speech_processor.tts_provider.synthesize(
-                                        response_text,
-                                        tts_result["audio_file_path"],
-                                        language
-                                    )
-                                    if fallback_result["success"]:
-                                        logger.info(f"Fallback TTS successful: {fallback_result['audio_file_path']}")
-                                        self.play_audio_response(fallback_result["audio_file_path"])
-                                    else:
-                                        logger.error(f"Fallback TTS also failed: {fallback_result['error']}")
-                                except Exception as e:
-                                    logger.error(f"TTS fallback internal error: {e}")
                     else:
                         logger.info("No response generated from command")
                 else:
